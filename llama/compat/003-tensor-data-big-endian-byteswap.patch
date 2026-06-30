@@ -1,0 +1,51 @@
+diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
+index e07b0d2..c4188ca 100644
+--- a/src/llama-model-loader.cpp
++++ b/src/llama-model-loader.cpp
+@@ -1385,6 +1385,38 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
+     }
+ }
+ 
++
++#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
++// On big-endian hosts (s390x, SPARC, POWER BE) GGUF tensor data is always
++// stored little-endian on disk. Byte-swap each element after loading.
++static void bswap_tensor_data(struct ggml_tensor * t) {
++    const size_t blk_size = ggml_type_size(t->type);
++    uint8_t * data = (uint8_t *)t->data;
++    const size_t nbytes = ggml_nbytes(t);
++    if (blk_size <= 1) return;
++    // For block-quantized types (Q4_0, Q8_0, etc.) the block begins with a
++    // fp16 scale (2 bytes, LE on disk). The nibble/byte payload after it is
++    // order-independent. Swap only the leading fp16 of every block.
++    if (t->type == GGML_TYPE_Q4_0 || t->type == GGML_TYPE_Q8_0 ||
++        t->type == GGML_TYPE_Q4_1 || t->type == GGML_TYPE_Q5_0 ||
++        t->type == GGML_TYPE_Q5_1) {
++        for (size_t off = 0; off + blk_size <= nbytes; off += blk_size) {
++            uint8_t tmp = data[off]; data[off] = data[off+1]; data[off+1] = tmp;
++        }
++        return;
++    }
++    // For plain scalar types (F32=4B, F16=2B, BF16=2B, I32=4B, etc.) swap
++    // every element of size blk_size across the whole buffer.
++    for (size_t i = 0; i + blk_size <= nbytes; i += blk_size) {
++        for (size_t lo = i, hi = i + blk_size - 1; lo < hi; ++lo, --hi) {
++            uint8_t tmp = data[lo]; data[lo] = data[hi]; data[hi] = tmp;
++        }
++    }
++}
++#else
++static void bswap_tensor_data(struct ggml_tensor *) {}
++#endif
++
+ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
+     const auto & w = require_weight(ggml_get_name(cur));
+ 
+@@ -1403,6 +1435,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
+         file->read_raw(cur->data, ggml_nbytes(cur));
+     }
+ 
++    bswap_tensor_data(cur);
+     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
+         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+     }
