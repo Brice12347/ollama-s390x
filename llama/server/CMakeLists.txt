@@ -203,8 +203,9 @@ if(_ollama_link_compat_sources AND DEFINED OLLAMA_LLAMA_CPP_COMPAT_DIR)
     if(TARGET mtmd)
         target_compile_definitions(mtmd PRIVATE OLLAMA_COMPAT_MTMD_BUILD)
     endif()
-    # Pass the s390x byteswap feature flag into the compat source files.
-    if(OLLAMA_S390X_BIGENDIAN_BSWAP AND TARGET llama)
+    # On s390x, pass OLLAMA_BIGENDIAN_BSWAP so the compat layer byteswaps
+    # tensor scale fields loaded from little-endian GGUF files.
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "s390x" AND TARGET llama)
         target_compile_definitions(llama PRIVATE OLLAMA_BIGENDIAN_BSWAP)
     endif()
 endif()
