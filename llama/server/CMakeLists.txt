@@ -228,12 +228,16 @@ if(_ollama_link_compat_sources AND DEFINED OLLAMA_LLAMA_CPP_COMPAT_DIR)
     if(TARGET mtmd)
         target_compile_definitions(mtmd PRIVATE OLLAMA_COMPAT_MTMD_BUILD)
     endif()
-    # Pass OLLAMA_BIGENDIAN_BSWAP when the s390x big-endian feature flag is ON
-    # so the compat layer byte-swaps tensor scale fields from little-endian GGUF.
-    if(OLLAMA_S390X_BIGENDIAN AND TARGET llama)
-        target_compile_definitions(llama PRIVATE OLLAMA_BIGENDIAN_BSWAP)
-        message(STATUS "OLLAMA_BIGENDIAN_BSWAP enabled on target 'llama'")
-    endif()
+endif()
+
+# Pass OLLAMA_BIGENDIAN_BSWAP when the s390x big-endian feature flag is ON
+# so the compat layer byte-swaps tensor scale fields from little-endian GGUF.
+# Kept outside the _ollama_link_compat_sources guard so OLLAMA_S390X_BIGENDIAN
+# is always evaluated — preventing a CMake "unused variable" warning when the
+# compat sources block is skipped (e.g. OLLAMA_LLAMA_CPP_COMPAT_DIR not set).
+if(OLLAMA_S390X_BIGENDIAN AND TARGET llama)
+    target_compile_definitions(llama PRIVATE OLLAMA_BIGENDIAN_BSWAP)
+    message(STATUS "OLLAMA_BIGENDIAN_BSWAP enabled on target 'llama'")
 endif()
 
 # Link temporary architecture sources (llama/compat/models/*.cpp) into the
