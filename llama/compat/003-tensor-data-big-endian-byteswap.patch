@@ -2,10 +2,7 @@ diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
 index e07b0d2..2a47eb9 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1385,6 +1385,31 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
-     }
- }
- 
+@@ -1387,0 +1388,25 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
 +
 +#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
 +static void bswap_tensor_data(struct ggml_tensor * t) {
@@ -31,14 +28,5 @@ index e07b0d2..2a47eb9 100644
 +static void bswap_tensor_data(struct ggml_tensor *) {}
 +#endif
 +
- void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
-     const auto & w = require_weight(ggml_get_name(cur));
- 
-@@ -1403,6 +1428,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
-         file->read_raw(cur->data, ggml_nbytes(cur));
-     }
- 
+@@ -1405,0 +1431 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
 +    bswap_tensor_data(cur);
-     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
-         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
-     }
