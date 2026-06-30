@@ -1,6 +1,6 @@
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1385,6 +1385,31 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
+@@ -1394,6 +1394,31 @@
      }
  }
  
@@ -31,8 +31,7 @@
 +
  void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
      const auto & w = require_weight(ggml_get_name(cur));
- 
-@@ -1403,6 +1428,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
+@@ -1412,6 +1437,7 @@
          file->read_raw(cur->data, ggml_nbytes(cur));
      }
  
