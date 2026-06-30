@@ -1,7 +1,7 @@
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1394,6 +1394,30 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
+@@ -1392,6 +1392,30 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
      }
  }
  
@@ -31,7 +31,7 @@ diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
 +
  void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
      const auto & w = require_weight(ggml_get_name(cur));
- 
+     if (llama_ollama_compat::maybe_load_text_tensor(this, cur, w.offs)) return;
 @@ -1412,6 +1436,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
          file->read_raw(cur->data, ggml_nbytes(cur));
      }
