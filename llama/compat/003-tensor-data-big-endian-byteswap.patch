@@ -1,24 +1,42 @@
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1392,6 +1392,43 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
+@@ -1385,6 +1385,115 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
      }
  }
  
 +#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
++// Byte-swap the endian-sensitive fields of a tensor block array loaded from a
++// little-endian GGUF file on a big-endian (s390x) host.
++//
++// GGUF files are always stored little-endian.  Integer byte arrays (the packed
++// quant bits themselves) and sub-byte values need no swap -- only the FP16/FP32
++// scale fields at well-known byte offsets within each block type require it.
++//
++// Block layout reference (QK_K = 256, K_SCALE_SIZE = 12):
++//   F16/BF16:   every 2 bytes are one FP16 value
++//   F32:        every 4 bytes are one float
++//   Q4_0:       [d:FP16(2), qs:u8[16]]                      - d at offset 0
++//   Q4_1:       [d:FP16(2), m:FP16(2), qs:u8[16]]           - d,m at offsets 0,2
++//   Q5_0:       [d:FP16(2), qh:u32(4), qs:u8[16]]           - d at offset 0
++//   Q5_1:       [d:FP16(2), m:FP16(2), qh:u32(4), qs:u8[16]] - d,m at 0,2
++//   Q8_0:       [d:FP16(2), qs:i8[32]]                      - d at offset 0
++//   Q2_K (84B): [scales:u8[16], qs:u8[64], d:FP16(2), dmin:FP16(2)] - d at 80
++//   Q3_K (110B):[hmask:u8[32], qs:u8[64], scales:u8[12], d:FP16(2)] - d at 108
++//   Q4_K (144B):[d:FP16(2), dmin:FP16(2), scales:u8[12], qs:u8[128]] - d at 0
++//   Q5_K (176B):[d:FP16(2), dmin:FP16(2), scales:u8[12], qh:u8[32], qs:u8[128]] - d at 0
++//   Q6_K (210B):[ql:u8[128], qh:u8[64], scales:i8[16], d:FP16(2)]   - d at 208
 +static void bswap_tensor_data(struct ggml_tensor * t) {
-+    const size_t blk_size = ggml_type_size(t->type);
 +    uint8_t * data = (uint8_t *)t->data;
 +    const size_t nbytes = ggml_nbytes(t);
-+    if (blk_size <= 1) return;
 +
++    // Scalar float types -- swap every element.
 +    if (t->type == GGML_TYPE_F16 || t->type == GGML_TYPE_BF16) {
 +        for (size_t off = 0; off + 1 < nbytes; off += 2) {
 +            uint8_t tmp = data[off]; data[off] = data[off + 1]; data[off + 1] = tmp;
 +        }
 +        return;
 +    }
-+
 +    if (t->type == GGML_TYPE_F32) {
 +        for (size_t off = 0; off + 3 < nbytes; off += 4) {
 +            uint8_t tmp = data[off]; data[off] = data[off + 3]; data[off + 3] = tmp;
@@ -27,15 +45,69 @@ diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
 +        return;
 +    }
 +
-+    if (t->type == GGML_TYPE_Q4_0 || t->type == GGML_TYPE_Q8_0 ||
-+        t->type == GGML_TYPE_Q4_1 || t->type == GGML_TYPE_Q5_0 ||
-+        t->type == GGML_TYPE_Q5_1) {
++    // Legacy quants: block starts with one or two FP16 scale fields.
++    // Q4_0, Q5_0, Q8_0: one FP16 delta at byte 0.
++    // Q4_1, Q5_1: two FP16 fields (delta, min) at bytes 0 and 2.
++    if (t->type == GGML_TYPE_Q4_0 || t->type == GGML_TYPE_Q5_0 ||
++        t->type == GGML_TYPE_Q8_0) {
++        const size_t blk_size = ggml_type_size(t->type);
 +        for (size_t off = 0; off + blk_size <= nbytes; off += blk_size) {
-+            uint8_t tmp = data[off]; data[off] = data[off + 1]; data[off + 1] = tmp;
-+            if (t->type == GGML_TYPE_Q4_1 || t->type == GGML_TYPE_Q5_1) {
-+                tmp = data[off + 2]; data[off + 2] = data[off + 3]; data[off + 3] = tmp;
-+            }
++            uint8_t * b = data + off;
++            uint8_t tmp = b[0]; b[0] = b[1]; b[1] = tmp; // d
 +        }
++        return;
++    }
++    if (t->type == GGML_TYPE_Q4_1 || t->type == GGML_TYPE_Q5_1) {
++        const size_t blk_size = ggml_type_size(t->type);
++        for (size_t off = 0; off + blk_size <= nbytes; off += blk_size) {
++            uint8_t * b = data + off;
++            uint8_t tmp = b[0]; b[0] = b[1]; b[1] = tmp; // d
++            tmp = b[2]; b[2] = b[3]; b[3] = tmp;          // m
++        }
++        return;
++    }
++
++    // K-quant super-blocks: only FP16 scale fields at type-specific offsets.
++    // Q4_K, Q5_K: two FP16 fields at the START of each block (offsets 0 and 2).
++    if (t->type == GGML_TYPE_Q4_K || t->type == GGML_TYPE_Q5_K) {
++        const size_t blk_size = ggml_type_size(t->type);
++        for (size_t off = 0; off + blk_size <= nbytes; off += blk_size) {
++            uint8_t * b = data + off;
++            uint8_t tmp = b[0]; b[0] = b[1]; b[1] = tmp; // d
++            tmp = b[2]; b[2] = b[3]; b[3] = tmp;          // dmin
++        }
++        return;
++    }
++    // Q2_K: two FP16 fields at the END of each block (offsets 80 and 82).
++    // Layout: scales[16] + qs[64] + d(2) + dmin(2) = 84 bytes.
++    if (t->type == GGML_TYPE_Q2_K) {
++        const size_t blk_size = ggml_type_size(t->type);
++        for (size_t off = 0; off + blk_size <= nbytes; off += blk_size) {
++            uint8_t * b = data + off + 80;
++            uint8_t tmp = b[0]; b[0] = b[1]; b[1] = tmp; // d
++            tmp = b[2]; b[2] = b[3]; b[3] = tmp;          // dmin
++        }
++        return;
++    }
++    // Q3_K: one FP16 field at END of each block (offset 108).
++    // Layout: hmask[32] + qs[64] + scales[12] + d(2) = 110 bytes.
++    if (t->type == GGML_TYPE_Q3_K) {
++        const size_t blk_size = ggml_type_size(t->type);
++        for (size_t off = 0; off + blk_size <= nbytes; off += blk_size) {
++            uint8_t * b = data + off + 108;
++            uint8_t tmp = b[0]; b[0] = b[1]; b[1] = tmp; // d
++        }
++        return;
++    }
++    // Q6_K: one FP16 field at END of each block (offset 208).
++    // Layout: ql[128] + qh[64] + scales[16] + d(2) = 210 bytes.
++    if (t->type == GGML_TYPE_Q6_K) {
++        const size_t blk_size = ggml_type_size(t->type);
++        for (size_t off = 0; off + blk_size <= nbytes; off += blk_size) {
++            uint8_t * b = data + off + 208;
++            uint8_t tmp = b[0]; b[0] = b[1]; b[1] = tmp; // d
++        }
++        return;
 +    }
 +}
 +#else
@@ -45,7 +117,7 @@ diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
  void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
      const auto & w = require_weight(ggml_get_name(cur));
      if (llama_ollama_compat::maybe_load_text_tensor(this, cur, w.offs)) return;
-@@ -1412,6 +1449,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
+@@ -1404,6 +1513,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
          file->read_raw(cur->data, ggml_nbytes(cur));
      }
  
