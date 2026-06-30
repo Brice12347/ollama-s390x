@@ -5,7 +5,7 @@ diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
      }
  }
  
-+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
++#if defined(OLLAMA_BIGENDIAN_BSWAP)
 +// Byte-swap the endian-sensitive fields of a tensor block array loaded from a
 +// little-endian GGUF file on a big-endian (s390x) host.
 +//
