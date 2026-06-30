@@ -1,7 +1,7 @@
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1392,6 +1392,30 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
+@@ -1392,6 +1392,43 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
      }
  }
  
@@ -11,17 +11,30 @@ diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
 +    uint8_t * data = (uint8_t *)t->data;
 +    const size_t nbytes = ggml_nbytes(t);
 +    if (blk_size <= 1) return;
++
++    if (t->type == GGML_TYPE_F16 || t->type == GGML_TYPE_BF16) {
++        for (size_t off = 0; off + 1 < nbytes; off += 2) {
++            uint8_t tmp = data[off]; data[off] = data[off + 1]; data[off + 1] = tmp;
++        }
++        return;
++    }
++
++    if (t->type == GGML_TYPE_F32) {
++        for (size_t off = 0; off + 3 < nbytes; off += 4) {
++            uint8_t tmp = data[off]; data[off] = data[off + 3]; data[off + 3] = tmp;
++            tmp = data[off + 1]; data[off + 1] = data[off + 2]; data[off + 2] = tmp;
++        }
++        return;
++    }
++
 +    if (t->type == GGML_TYPE_Q4_0 || t->type == GGML_TYPE_Q8_0 ||
 +        t->type == GGML_TYPE_Q4_1 || t->type == GGML_TYPE_Q5_0 ||
 +        t->type == GGML_TYPE_Q5_1) {
 +        for (size_t off = 0; off + blk_size <= nbytes; off += blk_size) {
 +            uint8_t tmp = data[off]; data[off] = data[off + 1]; data[off + 1] = tmp;
-+        }
-+        return;
-+    }
-+    for (size_t i = 0; i + blk_size <= nbytes; i += blk_size) {
-+        for (size_t lo = i, hi = i + blk_size - 1; lo < hi; ++lo, --hi) {
-+            uint8_t tmp = data[lo]; data[lo] = data[hi]; data[hi] = tmp;
++            if (t->type == GGML_TYPE_Q4_1 || t->type == GGML_TYPE_Q5_1) {
++                tmp = data[off + 2]; data[off + 2] = data[off + 3]; data[off + 3] = tmp;
++            }
 +        }
 +    }
 +}
@@ -32,7 +45,7 @@ diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
  void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
      const auto & w = require_weight(ggml_get_name(cur));
      if (llama_ollama_compat::maybe_load_text_tensor(this, cur, w.offs)) return;
-@@ -1412,6 +1436,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
+@@ -1412,6 +1449,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
          file->read_raw(cur->data, ggml_nbytes(cur));
      }
  
