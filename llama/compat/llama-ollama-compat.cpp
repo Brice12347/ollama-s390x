@@ -3215,9 +3215,7 @@ bool translate_metadata(const llama_model_loader * ml,
     // provides a read-only view of the file — there is no writeable buffer to
     // swap in-place. Force the read() path so bswap_tensor_data (injected by
     // 003-tensor-data-big-endian-byteswap.patch) gets a writable buffer.
-    // Controlled by OLLAMA_S390X_BIGENDIAN_BSWAP cmake option (ON by default
-    // on s390x); set OFF if supplying pre-converted big-endian GGUFs.
-#if defined(OLLAMA_BIGENDIAN_BSWAP)
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
     disable_mmap_for(ml);
 #endif
     // embeddinggemma must run before gemma3: it switches arch_name to

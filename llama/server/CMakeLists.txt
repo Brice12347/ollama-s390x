@@ -132,21 +132,6 @@ endif()
 # apply the patch by hand while iterating on the compat layer.
 set(_ollama_compat_patch_cmd "")
 include(${CMAKE_CURRENT_SOURCE_DIR}/../compat/compat.cmake)
-# s390x (IBM Z / LinuxONE) big-endian support
-# Standard GGUF files are little-endian. On s390x the compat layer
-# automatically byteswaps tensor scale fields at load time and disables
-# mmap so tensors land in a writable buffer. This option lets you turn
-# that off if you're supplying pre-converted big-endian GGUFs.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "s390x")
-    option(OLLAMA_S390X_BIGENDIAN_BSWAP
-        "Enable automatic little-endian GGUF tensor byteswap on s390x (ON by default)"
-        ON)
-    if(OLLAMA_S390X_BIGENDIAN_BSWAP)
-        message(STATUS "s390x: automatic GGUF tensor byteswap enabled")
-    else()
-        message(STATUS "s390x: automatic GGUF tensor byteswap disabled (pre-converted GGUFs assumed)")
-    endif()
-endif()
 option(OLLAMA_LLAMA_CPP_SKIP_COMPAT_PATCH
     "Skip llama.cpp compat patch application because the source is already prepared"
     OFF)
@@ -217,10 +202,6 @@ if(_ollama_link_compat_sources AND DEFINED OLLAMA_LLAMA_CPP_COMPAT_DIR)
     endforeach()
     if(TARGET mtmd)
         target_compile_definitions(mtmd PRIVATE OLLAMA_COMPAT_MTMD_BUILD)
-    endif()
-    # Pass the s390x byteswap feature flag into the compat source files.
-    if(OLLAMA_S390X_BIGENDIAN_BSWAP AND TARGET llama)
-        target_compile_definitions(llama PRIVATE OLLAMA_BIGENDIAN_BSWAP)
     endif()
 endif()
 
