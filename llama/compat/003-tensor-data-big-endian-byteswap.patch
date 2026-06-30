@@ -1,10 +1,11 @@
+diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
+index e07b0d2..61127b9 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1394,6 +1394,31 @@
+@@ -1385,6 +1385,30 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
      }
  }
  
-+
 +#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
 +static void bswap_tensor_data(struct ggml_tensor * t) {
 +    const size_t blk_size = ggml_type_size(t->type);
@@ -31,7 +32,8 @@
 +
  void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
      const auto & w = require_weight(ggml_get_name(cur));
-@@ -1412,6 +1437,7 @@
+ 
+@@ -1403,6 +1427,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
          file->read_raw(cur->data, ggml_nbytes(cur));
      }
  
