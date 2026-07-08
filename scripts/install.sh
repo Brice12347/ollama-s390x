@@ -12,7 +12,7 @@ red="$( (/usr/bin/tput bold || :; /usr/bin/tput setaf 1 || :) 2>&-)"
 plain="$( (/usr/bin/tput sgr0 || :) 2>&-)"
 
 status() { echo ">>> $*" >&2; }
-error() { echo "${red}ERROR:${plain} $*"; exit 1; }
+error() { echo "${red}ERROR:${plain} $*" >&2; trap - EXIT; exit 1; }
 warning() { echo "${red}WARNING:${plain} $*"; }
 
 TEMP_DIR=$(mktemp -d)
@@ -135,6 +135,46 @@ install_success() {
     status 'Install complete. Run "ollama" from the command line.'
 }
 trap install_success EXIT
+
+configure_systemd_s390x() {
+    if ! id ollama >/dev/null 2>&1; then
+        status "Creating ollama user..."
+        $SUDO useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
+    fi
+
+    status "Adding current user to ollama group..."
+    $SUDO usermod -a -G ollama "$(whoami)"
+
+    status "Creating ollama systemd service (s390x)..."
+    cat <<EOF | $SUDO tee /etc/systemd/system/ollama.service >/dev/null
+[Unit]
+Description=Ollama Service
+After=network-online.target
+
+[Service]
+ExecStart=$BINDIR/ollama serve
+User=ollama
+Group=ollama
+Restart=always
+RestartSec=3
+Environment="PATH=$PATH"
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    SYSTEMCTL_RUNNING="$(systemctl is-system-running || true)"
+    case $SYSTEMCTL_RUNNING in
+        running|degraded)
+            status "Enabling and starting ollama service..."
+            $SUDO systemctl daemon-reload
+            $SUDO systemctl enable ollama
+            $SUDO systemctl restart ollama
+            ;;
+        *)
+            warning "systemd is not running; service will start on next boot"
+            ;;
+    esac
+}
 
 # s390x: download pre-built binary from this repo's GitHub Releases
 if [ "$ARCH" = "s390x" ]; then
@@ -263,46 +303,6 @@ if [ -f /etc/nv_tegra_release ] ; then
 fi
 
 # Everything from this point onwards is optional.
-
-configure_systemd_s390x() {
-    if ! id ollama >/dev/null 2>&1; then
-        status "Creating ollama user..."
-        $SUDO useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
-    fi
-
-    status "Adding current user to ollama group..."
-    $SUDO usermod -a -G ollama "$(whoami)"
-
-    status "Creating ollama systemd service (s390x)..."
-    cat <<EOF | $SUDO tee /etc/systemd/system/ollama.service >/dev/null
-[Unit]
-Description=Ollama Service
-After=network-online.target
-
-[Service]
-ExecStart=$BINDIR/ollama serve
-User=ollama
-Group=ollama
-Restart=always
-RestartSec=3
-Environment="PATH=$PATH"
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    SYSTEMCTL_RUNNING="$(systemctl is-system-running || true)"
-    case $SYSTEMCTL_RUNNING in
-        running|degraded)
-            status "Enabling and starting ollama service..."
-            $SUDO systemctl daemon-reload
-            $SUDO systemctl enable ollama
-            $SUDO systemctl restart ollama
-            ;;
-        *)
-            warning "systemd is not running; service will start on next boot"
-            ;;
-    esac
-}
 
 configure_systemd() {
     if ! id ollama >/dev/null 2>&1; then
