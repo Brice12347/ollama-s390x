@@ -42,22 +42,30 @@ For Linux on IBM Z (s390x) — including z15/z16 LPARs and IBM LinuxONE — use 
 curl -fsSL https://raw.githubusercontent.com/Brice12347/ollama-s390x/main/scripts/install.sh | sh
 ```
 
-> **Note:** This script requires `root` or `sudo` privileges. It installs the `ollama` binary and registers the `ollama` systemd service, identical to the upstream Linux installer but built for `linux/s390x`.
+The installer automatically detects s390x, downloads a pre-built binary from [GitHub Releases](https://github.com/Brice12347/ollama-s390x/releases), installs it to `/usr/local/bin/ollama`, and configures a systemd service.
 
-Once installed, start the server and run a model:
+After install:
 
 ```shell
-ollama serve &
+ollama serve
 ollama run llama3.2:1b
 ```
 
-For CPU-only inference (no GPU/accelerator), models load fully into RAM. Recommended starting models for s390x:
+**Pin a specific release:**
 
-| Model | Tag | RAM Required |
-|---|---|---|
-| DeepSeek R1 1.5B | `deepseek-r1:1.5b` | ~1 GB |
-| Llama 3.2 1B | `llama3.2:1b` | ~1.5 GB |
-| Granite 3.3 2B | `granite3.3:2b` | ~1.9 GB |
+```shell
+OLLAMA_VERSION=v0.1.0 curl -fsSL \
+  https://raw.githubusercontent.com/Brice12347/ollama-s390x/main/scripts/install.sh | sh
+```
+
+**Debug mode:**
+
+```shell
+OLLAMA_DEBUG=1 curl -fsSL \
+  https://raw.githubusercontent.com/Brice12347/ollama-s390x/main/scripts/install.sh | sh
+```
+
+> **Note:** Binaries are built against glibc 2.36 (Debian 12 / Ubuntu 22.04) for broad compatibility. Tested on z15 and z17 hardware.
 
 ### Docker
 

@@ -14,6 +14,7 @@ plain="$( (/usr/bin/tput sgr0 || :) 2>&-)"
 status() { echo ">>> $*" >&2; }
 error() { echo "${red}ERROR:${plain} $*" >&2; trap - EXIT; exit 1; }
 warning() { echo "${red}WARNING:${plain} $*"; }
+debug() { [ -n "${OLLAMA_DEBUG:-}" ] && echo ">>> [debug] $*" >&2 || true; }
 
 TEMP_DIR=$(mktemp -d)
 cleanup() { rm -rf $TEMP_DIR; }
@@ -33,6 +34,7 @@ require() {
 
 OS="$(uname -s)"
 ARCH=$(uname -m)
+debug "Detected OS=$OS ARCH=$ARCH"
 case "$ARCH" in
     x86_64) ARCH="amd64" ;;
     aarch64|arm64) ARCH="arm64" ;;
@@ -180,18 +182,23 @@ EOF
 if [ "$ARCH" = "s390x" ]; then
     S390X_REPO_SLUG="Brice12347/ollama-s390x"
     S390X_REPO="https://github.com/${S390X_REPO_SLUG}"
-    status "Fetching latest s390x release from ${S390X_REPO}..."
 
-    RELEASE_TAG=$(curl --fail --silent --location \
-        "https://api.github.com/repos/${S390X_REPO_SLUG}/releases/latest" \
-        | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+    if [ -n "${OLLAMA_VERSION:-}" ]; then
+        RELEASE_TAG="$OLLAMA_VERSION"
+        status "Using pinned release: ${RELEASE_TAG}"
+    else
+        status "Fetching latest s390x release from ${S390X_REPO}..."
+        RELEASE_TAG=$(curl --fail --silent --location \
+            "https://api.github.com/repos/${S390X_REPO_SLUG}/releases/latest" \
+            | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
 
-    if [ -z "$RELEASE_TAG" ]; then
-        error "Could not determine latest release tag.
+        if [ -z "$RELEASE_TAG" ]; then
+            error "Could not determine latest release tag.
   API endpoint : https://api.github.com/repos/${S390X_REPO_SLUG}/releases/latest
   Possible cause: GitHub API rate limit or no published release yet.
   Workaround   : Set OLLAMA_VERSION=vX.Y.Z and re-run, e.g.:
     OLLAMA_VERSION=v0.9.0 curl -fsSL https://raw.githubusercontent.com/${S390X_REPO_SLUG}/main/scripts/install.sh | sh"
+        fi
     fi
 
     status "Resolved release tag: ${RELEASE_TAG}"
@@ -200,6 +207,7 @@ if [ "$ARCH" = "s390x" ]; then
         echo "$PATH" | grep -q "$BINDIR" && break || continue
     done
     OLLAMA_INSTALL_DIR=$(dirname "$BINDIR")
+    debug "BINDIR=$BINDIR OLLAMA_INSTALL_DIR=$OLLAMA_INSTALL_DIR"
 
     if [ -d "$OLLAMA_INSTALL_DIR/lib/ollama" ]; then
         status "Cleaning up old version at $OLLAMA_INSTALL_DIR/lib/ollama"
@@ -231,6 +239,17 @@ if [ "$ARCH" = "s390x" ]; then
     if [ "$OLLAMA_INSTALL_DIR/bin/ollama" != "$BINDIR/ollama" ]; then
         status "Making ollama accessible in the PATH in $BINDIR"
         $SUDO ln -sf "$OLLAMA_INSTALL_DIR/bin/ollama" "$BINDIR/ollama"
+    fi
+
+    # Create versioned symlinks (.so.0) so llama-server can resolve its dependencies
+    for f in "$OLLAMA_INSTALL_DIR/lib/ollama"/*.so; do
+        [ -f "$f" ] && $SUDO ln -sf "$f" "${f}.0"
+    done
+
+    # Register the lib dir with the dynamic linker
+    if [ -d /etc/ld.so.conf.d ]; then
+        echo "$OLLAMA_INSTALL_DIR/lib/ollama" | $SUDO tee /etc/ld.so.conf.d/ollama.conf >/dev/null
+        $SUDO ldconfig
     fi
 
     status "IBM Z (s390x) architecture detected - running in CPU-only mode"
@@ -288,7 +307,7 @@ download_and_extract "https://ollama.com/download" "$OLLAMA_INSTALL_DIR" "ollama
 
 if [ "$OLLAMA_INSTALL_DIR/bin/ollama" != "$BINDIR/ollama" ] ; then
     status "Making ollama accessible in the PATH in $BINDIR"
-    $SUDO ln -sf "$OLLAMA_INSTALL_DIR/ollama" "$BINDIR/ollama"
+    $SUDO ln -sf "$OLLAMA_INSTALL_DIR/bin/ollama" "$BINDIR/ollama"
 fi
 
 # Check for NVIDIA JetPack systems with additional downloads
