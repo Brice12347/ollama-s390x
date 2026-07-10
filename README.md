@@ -34,7 +34,9 @@ curl -fsSL https://ollama.com/install.sh | sh
 
 [Manual install instructions](https://docs.ollama.com/linux#manual-install)
 
-### IBM Z / LinuxONE (s390x)
+### IBM Z (s390x)
+
+For Linux on IBM Z (s390x) — including z15/z16 LPARs and IBM LinuxONE — use this fork's install script, which replaces the upstream x86/ARM binaries with s390x-compatible builds:
 
 ```shell
 curl -fsSL https://raw.githubusercontent.com/Brice12347/ollama-s390x/main/scripts/install.sh | sh

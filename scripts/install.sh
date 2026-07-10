@@ -12,7 +12,7 @@ red="$( (/usr/bin/tput bold || :; /usr/bin/tput setaf 1 || :) 2>&-)"
 plain="$( (/usr/bin/tput sgr0 || :) 2>&-)"
 
 status() { echo ">>> $*" >&2; }
-error() { echo "${red}ERROR:${plain} $*"; exit 1; }
+error() { echo "${red}ERROR:${plain} $*" >&2; trap - EXIT; exit 1; }
 warning() { echo "${red}WARNING:${plain} $*"; }
 debug() { [ -n "${OLLAMA_DEBUG:-}" ] && echo ">>> [debug] $*" >&2 || true; }
 
