@@ -38,10 +38,7 @@ debug "Detected OS=$OS ARCH=$ARCH"
 case "$ARCH" in
     x86_64) ARCH="amd64" ;;
     aarch64|arm64) ARCH="arm64" ;;
-    s390x)
-        ARCH="s390x"
-        status "Detected IBM Z (s390x) architecture"
-        ;;
+    s390x) ARCH="s390x" ;;
     *) error "Unsupported architecture: $ARCH" ;;
 esac
 
@@ -138,118 +135,6 @@ install_success() {
 }
 trap install_success EXIT
 
-configure_systemd_s390x() {
-    if ! id ollama >/dev/null 2>&1; then
-        status "Creating ollama user..."
-        $SUDO useradd -r -s /bin/false -U -m -d /usr/share/ollama ollama
-    fi
-
-    status "Adding current user to ollama group..."
-    $SUDO usermod -a -G ollama "$(whoami)"
-
-    status "Creating ollama systemd service (s390x)..."
-    cat <<EOF | $SUDO tee /etc/systemd/system/ollama.service >/dev/null
-[Unit]
-Description=Ollama Service
-After=network-online.target
-
-[Service]
-ExecStart=$BINDIR/ollama serve
-User=ollama
-Group=ollama
-Restart=always
-RestartSec=3
-Environment="PATH=$PATH"
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    SYSTEMCTL_RUNNING="$(systemctl is-system-running || true)"
-    case $SYSTEMCTL_RUNNING in
-        running|degraded)
-            status "Enabling and starting ollama service..."
-            $SUDO systemctl daemon-reload
-            $SUDO systemctl enable ollama
-            $SUDO systemctl restart ollama
-            ;;
-        *)
-            warning "systemd is not running; service will start on next boot"
-            ;;
-    esac
-}
-
-# s390x: download pre-built binary from this repo's GitHub Releases
-if [ "$ARCH" = "s390x" ]; then
-    S390X_REPO_SLUG="Brice12347/ollama-s390x"
-    S390X_REPO="https://github.com/${S390X_REPO_SLUG}"
-
-    # Use OLLAMA_VERSION if set, otherwise default to the pinned release tag.
-    if [ -n "${OLLAMA_VERSION:-}" ]; then
-        RELEASE_TAG="${OLLAMA_VERSION}"
-        status "Using specified s390x release tag: ${RELEASE_TAG}"
-    else
-        RELEASE_TAG="v0.1.0-justintest"
-        status "Using default s390x release tag: ${RELEASE_TAG}"
-    fi
-
-    for BINDIR in /usr/local/bin /usr/bin /bin; do
-        echo "$PATH" | grep -q "$BINDIR" && break || continue
-    done
-    OLLAMA_INSTALL_DIR=$(dirname "$BINDIR")
-    debug "BINDIR=$BINDIR OLLAMA_INSTALL_DIR=$OLLAMA_INSTALL_DIR"
-
-    if [ -d "$OLLAMA_INSTALL_DIR/lib/ollama" ]; then
-        status "Cleaning up old version at $OLLAMA_INSTALL_DIR/lib/ollama"
-        $SUDO rm -rf "$OLLAMA_INSTALL_DIR/lib/ollama"
-    fi
-    $SUDO install -o0 -g0 -m755 -d "$BINDIR"
-    $SUDO install -o0 -g0 -m755 -d "$OLLAMA_INSTALL_DIR/lib/ollama"
-
-    # Try .tgz first; fall back to .tar.zst for smaller downloads
-    S390X_URL_TGZ="${S390X_REPO}/releases/download/${RELEASE_TAG}/ollama-linux-s390x.tgz"
-    S390X_URL_ZST="${S390X_REPO}/releases/download/${RELEASE_TAG}/ollama-linux-s390x.tar.zst"
-
-    if curl --fail --silent --head --location "$S390X_URL_TGZ" >/dev/null 2>&1; then
-        status "Downloading ollama-linux-s390x.tgz (${RELEASE_TAG})..."
-        curl --fail --show-error --location --progress-bar "$S390X_URL_TGZ" | \
-            $SUDO tar -xzf - -C "$OLLAMA_INSTALL_DIR"
-    else
-        status "ollama-linux-s390x.tgz not found, trying .tar.zst..."
-        if ! available zstd; then
-            error "ollama-linux-s390x.tar.zst requires zstd for extraction. Please install it:
-  Debian/Ubuntu : sudo apt-get install zstd
-  RHEL/Fedora   : sudo dnf install zstd"
-        fi
-        status "Downloading ollama-linux-s390x.tar.zst (${RELEASE_TAG})..."
-        curl --fail --show-error --location --progress-bar "$S390X_URL_ZST" | \
-            zstd -d | $SUDO tar -xf - -C "$OLLAMA_INSTALL_DIR"
-    fi
-
-    if [ "$OLLAMA_INSTALL_DIR/bin/ollama" != "$BINDIR/ollama" ]; then
-        status "Making ollama accessible in the PATH in $BINDIR"
-        $SUDO ln -sf "$OLLAMA_INSTALL_DIR/bin/ollama" "$BINDIR/ollama"
-    fi
-
-    # Create versioned symlinks (.so.0) so llama-server can resolve its dependencies
-    for f in "$OLLAMA_INSTALL_DIR/lib/ollama"/*.so; do
-        [ -f "$f" ] && $SUDO ln -sf "$f" "${f}.0"
-    done
-
-    # Register the lib dir with the dynamic linker
-    if [ -d /etc/ld.so.conf.d ]; then
-        echo "$OLLAMA_INSTALL_DIR/lib/ollama" | $SUDO tee /etc/ld.so.conf.d/ollama.conf >/dev/null
-        $SUDO ldconfig
-    fi
-
-    status "IBM Z (s390x) architecture detected - running in CPU-only mode"
-
-    if available systemctl; then
-        configure_systemd_s390x
-    fi
-
-    exit 0
-fi
-
 # Function to download and extract with fallback from zst to tgz
 download_and_extract() {
     local url_base="$1"
@@ -292,7 +177,14 @@ fi
 status "Installing ollama to $OLLAMA_INSTALL_DIR"
 $SUDO install -o0 -g0 -m755 -d $BINDIR
 $SUDO install -o0 -g0 -m755 -d "$OLLAMA_INSTALL_DIR/lib/ollama"
-download_and_extract "https://ollama.com/download" "$OLLAMA_INSTALL_DIR" "ollama-linux-${ARCH}"
+
+# s390x binaries are hosted on the Brice12347/ollama-s390x GitHub releases;
+# all other architectures download from ollama.com.
+if [ "$ARCH" = "s390x" ]; then
+    download_and_extract "https://github.com/Brice12347/ollama-s390x/releases/latest/download" "$OLLAMA_INSTALL_DIR" "ollama-linux-s390x"
+else
+    download_and_extract "https://ollama.com/download" "$OLLAMA_INSTALL_DIR" "ollama-linux-${ARCH}"
+fi
 
 if [ "$OLLAMA_INSTALL_DIR/bin/ollama" != "$BINDIR/ollama" ] ; then
     status "Making ollama accessible in the PATH in $BINDIR"
@@ -378,9 +270,9 @@ if [ "$IS_WSL2" = true ]; then
     install_success
     exit 0
 fi
+
 # s390x systems don't use consumer GPUs - skip GPU detection
 if [ "$ARCH" = "s390x" ]; then
-    status "IBM Z (s390x) architecture detected - running in CPU-only mode"
     install_success
     exit 0
 fi
