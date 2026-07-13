@@ -1,0 +1,78 @@
+# Makefile — Ollama s390x
+# Targets: image, run, smoke, perf, clean
+#
+# Usage (s390x Linux / triframe dev container):
+#   make image          # build the ollama container image for s390x
+#   make run            # start ollama serve (foreground)
+#   make smoke          # quick health-check + single inference
+#   make perf           # full integration + performance test suite
+#   make clean          # remove build artefacts and stopped containers
+
+SHELL := /bin/bash
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+
+IMAGE_NAME   ?= ollama-s390x
+IMAGE_TAG    ?= dev
+OLLAMA_HOST  ?= 127.0.0.1:11434
+SMOKE_MODEL  ?= smollm:135m
+PERF_TIMEOUT ?= 90m
+BUILD_JOBS   ?= $(shell nproc)
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+.PHONY: image run smoke perf clean help
+
+help: ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+	  awk 'BEGIN {FS = ":.*?## "}; {printf "  %-10s %s\n", $$1, $$2}'
+
+# ── Targets ───────────────────────────────────────────────────────────────────
+
+image: ## Build the ollama s390x container image
+	@echo ">>> Building $(IMAGE_NAME):$(IMAGE_TAG)"
+	docker build \
+	  --platform linux/s390x \
+	  --tag $(IMAGE_NAME):$(IMAGE_TAG) \
+	  --file Dockerfile \
+	  .
+
+run: ## Start ollama serve (press Ctrl-C to stop)
+	@echo ">>> Starting ollama serve on $(OLLAMA_HOST)"
+	OLLAMA_HOST=$(OLLAMA_HOST) ./ollama serve
+
+smoke: ## Health check + single inference (requires running ollama serve)
+	@echo ">>> Smoke test against $(OLLAMA_HOST)"
+	@# 1. Health check
+	@STATUS=$$(curl -sf http://$(OLLAMA_HOST)/ 2>/dev/null); \
+	  if [ "$$STATUS" != "Ollama is running" ]; then \
+	    echo "FAIL: server not reachable at $(OLLAMA_HOST)"; exit 1; \
+	  fi
+	@echo "PASS: health check"
+	@# 2. Pull smoke model if not present
+	@./ollama pull $(SMOKE_MODEL)
+	@# 3. Single inference
+	@RESPONSE=$$(curl -sf http://$(OLLAMA_HOST)/api/generate \
+	  -H "Content-Type: application/json" \
+	  -d '{"model":"$(SMOKE_MODEL)","prompt":"Reply with one word: hello","stream":false,"options":{"temperature":0,"num_predict":5}}' \
+	  | tee /dev/stderr | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('done') else 1)" 2>/dev/null); \
+	  if [ $$? -ne 0 ]; then echo "FAIL: inference did not return done:true"; exit 1; fi
+	@echo "PASS: inference smoke test"
+
+perf: ## Run integration + performance test suite (go test)
+	@echo ">>> Running performance integration tests (timeout: $(PERF_TIMEOUT))"
+	go test \
+	  --tags=integration,perf \
+	  -count=1 \
+	  -v \
+	  -timeout $(PERF_TIMEOUT) \
+	  -run TestModelsPerf \
+	  ./integration/ \
+	  2>&1 | tee logs/perf_run_$$(date +%Y%m%d_%H%M%S).log
+
+clean: ## Remove build artefacts and stopped containers
+	@echo ">>> Cleaning build artefacts"
+	rm -rf build/ dist/
+	@echo ">>> Removing stopped containers (if docker available)"
+	@docker container prune -f 2>/dev/null || true
+	@echo ">>> Done"

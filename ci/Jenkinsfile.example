@@ -1,0 +1,104 @@
+// ci/Jenkinsfile.example
+//
+// Example Jenkins declarative pipeline for building and testing
+// Ollama on IBM Z (s390x).
+//
+// Prerequisites on the Jenkins agent:
+//   - docker (or podman aliased to docker)
+//   - go 1.22+
+//   - curl, jq
+//   - An s390x Linux agent labelled 's390x'
+
+pipeline {
+    agent { label 's390x' }
+
+    environment {
+        IMAGE_NAME   = 'ollama-s390x'
+        IMAGE_TAG    = "${env.BRANCH_NAME}-${env.BUILD_NUMBER}"
+        OLLAMA_HOST  = '127.0.0.1:11434'
+        SMOKE_MODEL  = 'smollm:135m'
+        PERF_TIMEOUT = '90m'
+    }
+
+    options {
+        timeout(time: 2, unit: 'HOURS')
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build image') {
+            steps {
+                sh 'make image IMAGE_TAG=$IMAGE_TAG'
+            }
+        }
+
+        stage('Smoke test') {
+            steps {
+                script {
+                    // Start ollama serve in background, wait for it to be ready
+                    sh '''
+                        ./ollama serve &
+                        OLLAMA_PID=$!
+                        echo $OLLAMA_PID > /tmp/ollama.pid
+
+                        # Wait up to 30s for the server to start
+                        for i in $(seq 1 30); do
+                            curl -sf http://$OLLAMA_HOST/ > /dev/null && break
+                            sleep 1
+                        done
+                    '''
+                    sh 'make smoke'
+                }
+            }
+            post {
+                always {
+                    sh 'kill $(cat /tmp/ollama.pid 2>/dev/null) 2>/dev/null || true'
+                }
+            }
+        }
+
+        stage('Performance tests') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'justin-update-one-liner'
+                }
+            }
+            steps {
+                sh 'make perf PERF_TIMEOUT=$PERF_TIMEOUT'
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'logs/perf_run_*.log', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Clean') {
+            steps {
+                sh 'make clean'
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Pipeline passed — ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+        }
+        failure {
+            echo "Pipeline failed — check archived logs"
+        }
+        always {
+            // Always clean up any leftover ollama processes
+            sh 'pkill -f "ollama serve" 2>/dev/null || true'
+        }
+    }
+}
