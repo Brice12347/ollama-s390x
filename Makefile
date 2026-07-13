@@ -21,13 +21,17 @@ BUILD_JOBS   ?= $(shell nproc)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-.PHONY: image run smoke perf clean help
+.PHONY: image build run smoke perf clean help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 	  awk 'BEGIN {FS = ":.*?## "}; {printf "  %-10s %s\n", $$1, $$2}'
 
 # ── Targets ───────────────────────────────────────────────────────────────────
+
+build: ## Compile the ollama binary (go build)
+	@echo ">>> Building ollama binary"
+	go build -o ollama .
 
 image: ## Build the ollama s390x container image
 	@echo ">>> Building $(IMAGE_NAME):$(IMAGE_TAG)"
@@ -37,11 +41,11 @@ image: ## Build the ollama s390x container image
 	  --file Dockerfile \
 	  .
 
-run: ## Start ollama serve (press Ctrl-C to stop)
+run: build ## Start ollama serve (press Ctrl-C to stop)
 	@echo ">>> Starting ollama serve on $(OLLAMA_HOST)"
 	OLLAMA_HOST=$(OLLAMA_HOST) ./ollama serve
 
-smoke: ## Health check + single inference (requires running ollama serve)
+smoke: build ## Health check + single inference (requires running ollama serve)
 	@echo ">>> Smoke test against $(OLLAMA_HOST)"
 	@# 1. Health check
 	@STATUS=$$(curl -sf http://$(OLLAMA_HOST)/ 2>/dev/null); \
