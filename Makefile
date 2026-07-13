@@ -61,11 +61,11 @@ smoke: build ## Health check + single inference (requires ollama serve + llama-s
 	@# 2. Pull smoke model if not present
 	@./ollama pull $(SMOKE_MODEL)
 	@# 3. Single inference
-	@RESPONSE=$$(curl -sf http://$(OLLAMA_HOST)/api/generate \
+	@curl -sf http://$(OLLAMA_HOST)/api/generate \
 	  -H "Content-Type: application/json" \
 	  -d '{"model":"$(SMOKE_MODEL)","prompt":"Reply with one word: hello","stream":false,"options":{"temperature":0,"num_predict":5}}' \
-	  | tee /dev/stderr | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('done') else 1)" 2>/dev/null); \
-	  if [ $$? -ne 0 ]; then echo "FAIL: inference did not return done:true"; exit 1; fi
+	  -o /tmp/ollama_smoke.json
+	@grep -q '"done":true' /tmp/ollama_smoke.json || { echo "FAIL: inference did not return done:true"; cat /tmp/ollama_smoke.json; exit 1; }
 	@echo "PASS: inference smoke test"
 
 perf: ## Run integration + performance test suite (go test)
