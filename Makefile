@@ -12,12 +12,13 @@ SHELL := /bin/bash
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-IMAGE_NAME   ?= ollama-s390x
-IMAGE_TAG    ?= dev
-OLLAMA_HOST  ?= 127.0.0.1:11434
-SMOKE_MODEL  ?= smollm:135m
-PERF_TIMEOUT ?= 90m
-BUILD_JOBS   ?= $(shell nproc)
+IMAGE_NAME          ?= ollama-s390x
+IMAGE_TAG           ?= dev
+OLLAMA_HOST         ?= 127.0.0.1:11434
+SMOKE_MODEL         ?= smollm:135m
+PERF_TIMEOUT        ?= 90m
+BUILD_JOBS          ?= $(shell nproc)
+LLAMA_BUILD_DIR     ?= build/llama-server-cpu_s390x/bin
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -48,7 +49,7 @@ image: ## Build the ollama s390x container image
 
 run: build ## Start ollama serve (press Ctrl-C to stop)
 	@echo ">>> Starting ollama serve on $(OLLAMA_HOST)"
-	OLLAMA_HOST=$(OLLAMA_HOST) ./ollama serve
+	OLLAMA_HOST=$(OLLAMA_HOST) OLLAMA_LIBRARY_PATH=$(LLAMA_BUILD_DIR) ./ollama serve
 
 smoke: build ## Health check + single inference (requires ollama serve + llama-server)
 	@echo ">>> Smoke test against $(OLLAMA_HOST)"
