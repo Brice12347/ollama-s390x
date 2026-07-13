@@ -39,12 +39,19 @@ cmake: ## Build llama-server via CMake (required for inference)
 	cmake -S llama/server --preset cpu_s390x -DGGML_BLAS=OFF
 	cmake --build build/llama-server-cpu_s390x --parallel $(BUILD_JOBS)
 
-image: ## Build the ollama s390x container image
+image: ## Build the ollama s390x dev container image (run from triframe host)
 	@echo ">>> Building $(IMAGE_NAME):$(IMAGE_TAG)"
-	docker build \
-	  --platform linux/s390x \
+	@if [ ! -f Dockerfile.dev ]; then \
+	  echo "Dockerfile.dev not found. Run scripts/bootstrap_dev_env.sh first to generate it."; \
+	  exit 1; \
+	fi
+	podman build \
 	  --tag $(IMAGE_NAME):$(IMAGE_TAG) \
-	  --file Dockerfile \
+	  --file Dockerfile.dev \
+	  . 2>/dev/null || \
+	docker build \
+	  --tag $(IMAGE_NAME):$(IMAGE_TAG) \
+	  --file Dockerfile.dev \
 	  .
 
 run: build ## Start ollama serve (press Ctrl-C to stop)
