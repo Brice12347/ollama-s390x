@@ -21,7 +21,7 @@ BUILD_JOBS   ?= $(shell nproc)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-.PHONY: image build run smoke perf clean help
+.PHONY: image build cmake run smoke perf clean help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -32,6 +32,11 @@ help: ## Show this help
 build: ## Compile the ollama binary (go build)
 	@echo ">>> Building ollama binary"
 	go build -o ollama .
+
+cmake: ## Build llama-server via CMake (required for inference)
+	@echo ">>> Building llama-server (cpu_s390x preset)"
+	cmake -S llama/server --preset cpu_s390x
+	cmake --build --preset cpu_s390x --parallel $(BUILD_JOBS)
 
 image: ## Build the ollama s390x container image
 	@echo ">>> Building $(IMAGE_NAME):$(IMAGE_TAG)"
@@ -45,7 +50,7 @@ run: build ## Start ollama serve (press Ctrl-C to stop)
 	@echo ">>> Starting ollama serve on $(OLLAMA_HOST)"
 	OLLAMA_HOST=$(OLLAMA_HOST) ./ollama serve
 
-smoke: build ## Health check + single inference (requires running ollama serve)
+smoke: build ## Health check + single inference (requires ollama serve + llama-server)
 	@echo ">>> Smoke test against $(OLLAMA_HOST)"
 	@# 1. Health check
 	@STATUS=$$(curl -sf http://$(OLLAMA_HOST)/ 2>/dev/null); \
