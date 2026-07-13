@@ -273,6 +273,13 @@ fi
 
 # s390x systems don't use consumer GPUs - skip GPU detection
 if [ "$ARCH" = "s390x" ]; then
+    # Register shared libraries with the system linker so llama-server can find them
+    if [ -d "$OLLAMA_INSTALL_DIR/lib/ollama" ]; then
+        status "Registering ollama shared libraries..."
+        (cd "$OLLAMA_INSTALL_DIR/lib/ollama" && for f in *.so; do $SUDO ln -sf "$f" "${f}.0" 2>/dev/null || true; done)
+        echo "$OLLAMA_INSTALL_DIR/lib/ollama" | $SUDO tee /etc/ld.so.conf.d/ollama.conf >/dev/null
+        $SUDO ldconfig
+    fi
     install_success
     exit 0
 fi
