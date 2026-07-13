@@ -45,17 +45,35 @@ CPU-only benchmarks (LinuxONE Community Cloud VM, no AIU):
 
 Source: [`logs/model_test_001.md`](../logs/model_test_001.md)
 
-### Hypothesis: VXE2 vs scalar gap
+### VXE2 vs scalar benchmark — triframe results (2026-07-13)
 
-No scalar baseline has been measured yet. The `cpu_s390x_novxe` CMake preset builds without VXE and can be used to isolate the SIMD contribution:
+10-shot runs, `num_predict=80`, binary confirmed via `starting llama-server cmd=` log line:
 
-```sh
-make cmake PRESET=cpu_s390x_novxe   # not yet a Makefile param — run manually
-cmake -S llama/server --preset cpu_s390x_novxe -DGGML_BLAS=OFF
-cmake --build build/llama-server-cpu_s390x_novxe --parallel $(nproc)
-```
+**Run 1 — smollm:135m Q4_0**
 
-Expected: 2–4× throughput difference between VXE2 and scalar for quantized integer kernels. This is unconfirmed — **measuring this is the highest-value next benchmark**.
+| Build | Binary | Mean (tok/s) | Median | Stdev | Min | Max |
+|-------|--------|-------------|--------|-------|-----|-----|
+| VXE2 | `cpu_s390x` ✅ | **115.5** | **118.4** | 27.7 | 72.7 | 156.0 |
+| Scalar | `cpu_s390x_novxe` ✅ | **104.7** | **108.0** | 16.6 | 77.5 | 126.1 |
+| **VXE2 advantage** | | **+10.8 tok/s (+10.3%)** | +10.4 tok/s | | | |
+
+**Run 2 — llama3.2:3b Q4_K_M**
+
+| Build | Binary | Mean (tok/s) | Median | Stdev | Min | Max | Load time |
+|-------|--------|-------------|--------|-------|-----|-----|-----------|
+| VXE2 | `cpu_s390x` ✅ | **12.42** | 12.65 | 1.10 | 10.5 | 14.1 | **15.33 s** |
+| Scalar | `cpu_s390x_novxe` ✅ | **12.98** | 12.95 | 0.72 | 11.8 | 14.1 | **2.01 s** |
+| **Scalar advantage** | | **+0.56 tok/s (+4.5%)** | +0.30 | | | | **7.6× faster** |
+
+**Hypothesis 1 status: inconclusive on AIU hardware.**
+
+- On `smollm:135m` (86 MB, LLC-resident, no AIU offload): VXE2 **+10.3%**.
+- On `llama3.2:3b` (2 GB, AIU offloads matrix ops): scalar marginally faster (**−4.5%** for VXE2), within noise.
+- **AIU VFs dominate throughput at ≥3B** — the scalar vs VXE2 difference in the CPU GGML kernel is irrelevant when matrix multiplications are offloaded to the AIU.
+- **VXE2 bswap at model load is 7.6× slower than scalar** (15.33s vs 2.01s for 255 tensors / 1.9 GB). The scalar build processes each tensor in 1–9 ms; VXE2 shows 0.01–508 ms per tensor with high variance. Root cause unknown — likely cache-line pressure or pipeline stalls in the VXE2 store path during the byteswap loop.
+
+A definitive SIMD comparison requires a **CPU-only system** (LinuxONE Community Cloud VM, no AIU)
+with a ≥1B model. See [`logs/benchmark_vxe2_vs_scalar_001.md`](../logs/benchmark_vxe2_vs_scalar_001.md) for full raw data and methodology.
 
 ### OpenBLAS
 
@@ -134,9 +152,9 @@ All GGUF models from Ollama.com and HuggingFace are stored little-endian. The s3
 handle_bigendian_bswap: big-endian host detected with little-endian GGUF; registering per-tensor bswap LoadOps
 ```
 
-**Impact:** Estimated 0.5–2s additional load time for models up to 7B. Not measured in isolation.  
-**Subsequent loads:** Tensors are cached after first load — repeat inferences within `keep_alive` window do not re-swap.  
-**Mitigation:** Keep `OLLAMA_KEEP_ALIVE` at 5m+ in production to avoid repeated load cycles.
+**Impact (measured):** For `llama3.2:3b` (255 tensors, 1.9 GB), the scalar build swaps all tensors in **~834 ms** total; the VXE2 build takes **~14,192 ms** (14.2s). The VXE2 discrepancy is anomalous — individual tensor durations range 0.01–508 ms suggesting cache-line bouncing or pipeline stalls in the VXE2 store path.
+**Subsequent loads:** Tensors are cached after first load — repeat inferences within `keep_alive` window do not re-swap.
+**Mitigation:** Keep `OLLAMA_KEEP_ALIVE` at 5m+ in production to avoid repeated load cycles. On VXE2, this is especially important given the 15s cold-load penalty on 3B models.
 
 Source: [`docs/gguf_s390x_notes.md`](gguf_s390x_notes.md)
 
@@ -234,7 +252,7 @@ Source: [`logs/model_test_001.md`](../logs/model_test_001.md)
 
 | Hypothesis | How to test | Expected outcome |
 |-----------|-------------|-----------------|
-| VXE2 SIMD provides 2–4× speedup over scalar | Run same benchmark with `cpu_s390x` vs `cpu_s390x_novxe` build | Confirm SIMD contribution |
+| VXE2 SIMD provides 2–4× speedup over scalar | Re-run on LinuxONE Community Cloud VM with `llama3.2:1b` or `llama3.2:3b` — CPU-only, no AIU contention | **Inconclusive on AIU hardware.** smollm:135m: +10.3% VXE2. llama3.2:3b: scalar +4.5% (VXE2 slower at inference; 7.6× slower at load). AIU dominates at ≥3B. CPU-only VM test needed. See `logs/benchmark_vxe2_vs_scalar_001.md`. |
 | OpenBLAS improves large-model throughput | Install `libopenblas-dev`, rebuild with `GGML_BLAS=ON` | 5–20% improvement on 7B+ models |
 | zDNN (z17+/AIU2) accelerator improves throughput | Build with `cpu_s390x_zdnn` preset on z17 hardware | Significant improvement for supported ops |
 | qwen2.5-coder 1.91 TPS is a tokenizer bug | Profile tokenizer separately, test with raw embeddings | Identify slow path in prompt eval |
@@ -249,6 +267,7 @@ Source: [`logs/model_test_001.md`](../logs/model_test_001.md)
 |------|---------|
 | [`logs/model_perf_test_001.md`](../logs/model_perf_test_001.md) | AIU-accelerated performance test — load time, prompt eval TPS, eval TPS, context scaling across 7 models |
 | [`logs/model_test_001.md`](../logs/model_test_001.md) | CPU-only functional + throughput test — 12 models, 7 quant formats, RAM usage |
+| [`logs/benchmark_vxe2_vs_scalar_001.md`](../logs/benchmark_vxe2_vs_scalar_001.md) | VXE2 vs scalar benchmark — 2 runs: smollm:135m (+10.3% VXE2) and llama3.2:3b (−4.5% VXE2 / scalar faster; VXE2 load 7.6× slower). Full raw data, methodology, cross-run summary. |
 | [`docs/model_compatibility_matrix.md`](model_compatibility_matrix.md) | Summary matrix — all tested models with tok/s, RAM, pass/fail status |
 | [`docs/gguf_s390x_notes.md`](gguf_s390x_notes.md) | GGUF endianness, quantization formats, SIMD notes |
 | [`docs/install-sh-s390x-improvements.md`](install-sh-s390x-improvements.md) | Library path and installer fix history |
