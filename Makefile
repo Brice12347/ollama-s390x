@@ -36,7 +36,7 @@ build: ## Compile the ollama binary (go build)
 cmake: ## Build llama-server via CMake (required for inference)
 	@echo ">>> Building llama-server (cpu_s390x preset)"
 	cmake -S llama/server --preset cpu_s390x -DGGML_BLAS=OFF
-	cmake --build --preset cpu_s390x --parallel $(BUILD_JOBS)
+	cmake --build build/llama-server-cpu_s390x --parallel $(BUILD_JOBS)
 
 image: ## Build the ollama s390x container image
 	@echo ">>> Building $(IMAGE_NAME):$(IMAGE_TAG)"
