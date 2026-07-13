@@ -183,6 +183,18 @@ if [ "$ARCH" = "s390x" ]; then
     S390X_REPO_SLUG="Brice12347/ollama-s390x"
     S390X_REPO="https://github.com/${S390X_REPO_SLUG}"
 
+<<<<<<< Updated upstream
+=======
+<<<<<<< HEAD
+    # Use OLLAMA_VERSION if set, otherwise default to the pinned release tag.
+    if [ -n "${OLLAMA_VERSION:-}" ]; then
+        RELEASE_TAG="${OLLAMA_VERSION}"
+        status "Using specified s390x release tag: ${RELEASE_TAG}"
+    else
+        RELEASE_TAG="v0.1.0-justintest"
+        status "Using default s390x release tag: ${RELEASE_TAG}"
+=======
+>>>>>>> Stashed changes
     if [ -n "${OLLAMA_VERSION:-}" ]; then
         RELEASE_TAG="$OLLAMA_VERSION"
         status "Using pinned release: ${RELEASE_TAG}"
@@ -199,9 +211,11 @@ if [ "$ARCH" = "s390x" ]; then
   Workaround   : Set OLLAMA_VERSION=vX.Y.Z and re-run, e.g.:
     OLLAMA_VERSION=v0.9.0 curl -fsSL https://raw.githubusercontent.com/${S390X_REPO_SLUG}/main/scripts/install.sh | sh"
         fi
+<<<<<<< Updated upstream
+=======
+>>>>>>> efe319cb89c8a93e71dee4d142685c9a1288286f
+>>>>>>> Stashed changes
     fi
-
-    status "Resolved release tag: ${RELEASE_TAG}"
 
     for BINDIR in /usr/local/bin /usr/bin /bin; do
         echo "$PATH" | grep -q "$BINDIR" && break || continue
