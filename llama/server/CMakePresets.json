@@ -66,7 +66,8 @@
       "binaryDir": "${sourceDir}/../../build/llama-server-cpu_s390x_novxe",
       "description": "s390x scalar-only CPU build with VXE disabled (debugging / older z14 hardware)",
       "cacheVariables": {
-        "GGML_VXE": "OFF"
+        "GGML_VXE": "OFF",
+        "OLLAMA_S390X_VXE": "OFF"
       }
     },
     {
