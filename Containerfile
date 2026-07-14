@@ -38,6 +38,7 @@ RUN apt-get update \
         make \
         cmake \
         ninja-build \
+        pkg-config \
         libopenblas-dev \
     && rm -rf /var/lib/apt/lists/*
 # CMake 3.28 and Ninja 1.11 ship in Ubuntu 24.04 noble — both satisfy the
