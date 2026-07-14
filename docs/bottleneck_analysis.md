@@ -1,273 +1,245 @@
-# Bottleneck Analysis — Ollama on s390x (IBM Z / LinuxONE)
+# Bottleneck Analysis for `ollama-s390x`
 
-**Platform:** IBM Z z15 LPAR, 1 TB RAM, 32 logical CPUs, 12 AIU virtual functions  
-**Build:** Ollama from source, `main` branch, CPU-only + AIU-accelerated configurations  
-**Last updated:** 2026-07-13
+## Purpose
 
----
+This document captures the current understanding of likely performance bottlenecks for the `s390x` big-endian port of Ollama, based on the current codebase and existing porting notes. It is intended to guide profiling and validation work, not to claim that every item below has already been measured.
 
-## Executive Summary
+## Scope
 
-Five distinct bottleneck categories have been identified on s390x. In order of impact:
+This analysis is focused on:
 
-1. **Model size vs available memory** — RAM is the primary constraint on small VMs (4 GB LinuxONE Community Cloud). Larger models simply OOM.
-2. **KV cache pressure at large context** — tok/s drops significantly as context window fills. deepseek-r1:1.5b drops from 21.95 → 6.64 tok/s between short and long-context runs at 8192.
-3. **Big-endian byte-swap at model load** — adds 0.5–10s latency on first load depending on model size. Not a steady-state bottleneck.
-4. **Quantization format selection** — Q2_K is unstable (1–11 tok/s variance). IQ4_XS fails to load entirely. Wrong quant choice can make a model unusable.
-5. **Library path misconfiguration** — `OLLAMA_LIBRARY_PATH` not set → `llama-server` not found → 500 on every inference request. Fixed in installer and Makefile but a recurring trap on manual setups.
+- server-side model loading
+- native llama runtime startup
+- CPU-only inference behavior
+- big-endian compatibility overhead
+- scheduler behavior that may amplify load costs
 
----
+This analysis is not yet a benchmark report. The items below are **insights and hypotheses grounded in the current implementation**.
 
-## 1. CPU / SIMD Acceleration
+## System Runtime Map
 
-### What is active
+At a high level, the execution path is:
 
-The `cpu_s390x` CMake preset compiles `llama-server` with:
-- `-march=z15 -mvx -mzvector` → VXE2 SIMD enabled for z15 hardware
-- `-march=z16 -mvx -mzvector` → VXE2 + NNPA enabled for z16 hardware
-- `GGML_CPU_ALL_VARIANTS=ON` → runtime dispatch picks the best variant
+1. [`main()`](../main.go:11) starts the CLI via [`cmd.NewCLI()`](../cmd/cmd.go:2283)
+2. [`ollama serve`](../cmd/cmd.go:2389) enters [`RunServer()`](../cmd/cmd.go:1985)
+3. [`RunServer()`](../cmd/cmd.go:1985) binds a listener and calls [`server.Serve()`](../server/routes.go:1945)
+4. [`server.Serve()`](../server/routes.go:1945) sets up routes, scheduler, model cache, and runtime defaults
+5. inference requests hit handlers such as [`GenerateHandler()`](../server/routes.go:254) and [`ChatHandler()`](../server/routes.go:2445)
+6. handlers call [`scheduleRunner()`](../server/routes.go:203) to acquire or load a model runner
+7. the scheduler loads GGUF metadata, predicts memory placement, and creates a native runner in [`load()`](../server/sched.go:502)
+8. GGUF-backed models are served by a llama-server subprocess created through [`llm.NewLlamaServer()`](../llm/server.go:108) and [`NewLlamaServerRunner()`](../llm/llama_server.go:819)
+9. the Go server communicates with that subprocess over localhost HTTP for completion, chat, embedding, tokenization, and template application
 
-This means both z15 and z16 variants are compiled into the same binary and the best one is selected at runtime.
+This means the system is split into two layers:
 
-### Observed throughput
+- **Go orchestration layer**: request handling, scheduling, subprocess management, streaming
+- **native llama runtime layer**: model loading, tensor handling, token generation, embedding computation
 
-CPU-only benchmarks (LinuxONE Community Cloud VM, no AIU):
+For `s390x`, the most important platform-specific bottlenecks are likely in the **native load path** and **native CPU inference kernels**, not in the Go API layer.
 
-| Model | Quant | Tok/s |
-|-------|-------|-------|
-| SmolLM 135M | Q4_0 | 104.6 |
-| SmolLM 360M | Q4_0 | 77.9 |
-| Llama 3.2 1B | Q4_K_M | 17.6 |
-| Llama 3.2 1B | Q8_0 | 22.75 |
-| Granite 3.3 2B | Q4_K_M | 12.25 |
-| Llama 3.2 3B | Q4_K_M | 12.2 |
-| Mistral 7B | Q4_K_M | 5.8 |
+## Confirmed Architectural Constraints Relevant to `s390x`
 
-Source: [`logs/model_test_001.md`](../logs/model_test_001.md)
+### 1. Big-endian tensor loading requires byteswapping
 
-### VXE2 vs scalar benchmark — triframe results (2026-07-13)
+The port notes in [`docs/s390x-big-endian-inference.md`](./s390x-big-endian-inference.md) and the native patch in [`llama/compat/003-tensor-data-big-endian-byteswap.patch`](../llama/compat/003-tensor-data-big-endian-byteswap.patch) establish that GGUF tensor data needs explicit byteswapping on big-endian systems.
 
-10-shot runs, `num_predict=80`, binary confirmed via `starting llama-server cmd=` log line:
+The patch adds:
 
-**Run 1 — smollm:135m Q4_0**
+- [`bswap_buf`](../llama/compat/003-tensor-data-big-endian-byteswap.patch:29)
+- [`bswap_tensor_data`](../llama/compat/003-tensor-data-big-endian-byteswap.patch:102)
 
-| Build | Binary | Mean (tok/s) | Median | Stdev | Min | Max |
-|-------|--------|-------------|--------|-------|-----|-----|
-| VXE2 | `cpu_s390x` ✅ | **115.5** | **118.4** | 27.7 | 72.7 | 156.0 |
-| Scalar | `cpu_s390x_novxe` ✅ | **104.7** | **108.0** | 16.6 | 77.5 | 126.1 |
-| **VXE2 advantage** | | **+10.8 tok/s (+10.3%)** | +10.4 tok/s | | | |
+and applies them in the llama model loader load paths.
 
-**Run 2 — llama3.2:3b Q4_K_M**
+### 2. `mmap` is disabled for big-endian transformed loads
 
-| Build | Binary | Mean (tok/s) | Median | Stdev | Min | Max | Load time |
-|-------|--------|-------------|--------|-------|-----|-----|-----------|
-| VXE2 | `cpu_s390x` ✅ | **12.42** | 12.65 | 1.10 | 10.5 | 14.1 | **15.33 s** |
-| Scalar | `cpu_s390x_novxe` ✅ | **12.98** | 12.95 | 0.72 | 11.8 | 14.1 | **2.01 s** |
-| **Scalar advantage** | | **+0.56 tok/s (+4.5%)** | +0.30 | | | | **7.6× faster** |
+The big-endian support notes in [`docs/s390x-big-endian-inference.md`](./s390x-big-endian-inference.md) explain that `mmap()` cannot be used for in-place tensor byteswapping, so the runtime forces model loads through writable buffers.
 
-**Hypothesis 1 status: inconclusive on AIU hardware.**
+This is a major architectural difference from little-endian deployments.
 
-- On `smollm:135m` (86 MB, LLC-resident, no AIU offload): VXE2 **+10.3%**.
-- On `llama3.2:3b` (2 GB, AIU offloads matrix ops): scalar marginally faster (**−4.5%** for VXE2), within noise.
-- **AIU VFs dominate throughput at ≥3B** — the scalar vs VXE2 difference in the CPU GGML kernel is irrelevant when matrix multiplications are offloaded to the AIU.
-- **VXE2 bswap at model load is 7.6× slower than scalar** (15.33s vs 2.01s for 255 tensors / 1.9 GB). The scalar build processes each tensor in 1–9 ms; VXE2 shows 0.01–508 ms per tensor with high variance. Root cause unknown — likely cache-line pressure or pipeline stalls in the VXE2 store path during the byteswap loop.
+### 3. Current `s390x` operation is effectively CPU-only
 
-A definitive SIMD comparison requires a **CPU-only system** (LinuxONE Community Cloud VM, no AIU)
-with a ≥1B model. See [`logs/benchmark_vxe2_vs_scalar_001.md`](../logs/benchmark_vxe2_vs_scalar_001.md) for full raw data and methodology.
+The same notes state that there is currently no GGML GPU backend for `s390x`, so inference work falls onto the CPU path.
 
-### OpenBLAS
+That makes the quality of CPU kernels, vectorization, cache behavior, and memory bandwidth especially important.
 
-`GGML_BLAS=OFF` is set in `make cmake` because OpenBLAS is not installed in the dev container or on the LinuxONE Community Cloud. OpenBLAS on s390x supports VSX/VXE and could improve matrix multiplication throughput for larger models. Not yet tested.
+## Primary Insights
 
-**To test:**
-```sh
-sudo apt-get install -y libopenblas-dev
-cmake -S llama/server --preset cpu_s390x   # GGML_BLAS=ON is in the preset
-cmake --build build/llama-server-cpu_s390x --parallel $(nproc)
-```
+## Insight 1: cold model load is very likely more expensive on `s390x` than on little-endian hosts
 
----
+### Why
 
-## 2. Memory / KV Cache Pressure
+The native load path on `s390x` includes all of the normal model startup costs plus additional overhead from:
 
-### Context scaling data
+- reading tensors into writable memory rather than relying on `mmap`
+- traversing tensor buffers to byteswap endian-sensitive fields
+- validating post-swap tensor data
 
-From the AIU-accelerated triframe benchmarks:
+These operations are visible in [`llama/compat/003-tensor-data-big-endian-byteswap.patch`](../llama/compat/003-tensor-data-big-endian-byteswap.patch:121) and [`llama/compat/003-tensor-data-big-endian-byteswap.patch`](../llama/compat/003-tensor-data-big-endian-byteswap.patch:129).
 
-| Model | Context | Prompt Tokens | Eval TPS |
-|-------|---------|--------------|----------|
-| deepseek-r1:1.5b | 4096 | 10 | 18.42 |
-| deepseek-r1:1.5b | 4096 | 2090 | 4.22 |
-| deepseek-r1:1.5b | 8192 | 10 | 21.95 |
-| deepseek-r1:1.5b | 8192 | 4190 | 6.64 |
-| deepseek-r1:1.5b | 16384 | 10 | 19.73 |
-| lfm2.5-thinking | 8192 | 20 | 46.28 |
-| lfm2.5-thinking | 8192 | 4630 | 13.83 |
-| gpt-oss:20b | 4096 | 80 | 3.58 |
-| gpt-oss:20b | 8192 | 80 | 7.78 |
+### Hypothesis
 
-Source: [`logs/model_perf_test_001.md`](../logs/model_perf_test_001.md)
+For large GGUF models, **cold load latency on `s390x` is likely dominated by tensor read + byteswap + copy behavior**, not by Go-side orchestration.
 
-### Analysis
+### Expected symptoms
 
-- **Short-prompt throughput is 3–5× higher than long-prompt throughput** for the same model and context size. This is the KV cache effect — each new token must attend over all previous tokens.
-- **Doubling context from 4096 → 8192 can improve throughput** for short prompts (deepseek-r1: 18.42 → 21.95 tok/s) because the larger context reduces re-loading overhead. It does not help once the context is full.
-- **gpt-oss:20b benefits from larger context** (3.58 → 7.78 tok/s at 80-token prompt, 4096 → 8192). Likely due to better memory layout at the larger size.
+- much slower first request after model load
+- expensive model switching
+- significant penalty after eviction/reload cycles
+- performance sensitivity to model size and quantization layout
 
-### RAM constraints
+## Insight 2: memory bandwidth may be a larger limiter than compute during model load
 
-| Scenario | Max recommended model |
-|----------|-----------------------|
-| 4 GB VM (LinuxONE Community Cloud) | `llama3.2:1b` (1.5 GiB) |
-| 8 GB VM | `llama3.2:3b` (2.4 GiB) or `granite3.3:2b` (1.9 GiB) |
-| 32 GB+ (triframe LPAR) | Any model in the compatibility matrix |
+### Why
 
-Source: [`docs/model_compatibility_matrix.md`](model_compatibility_matrix.md)
+The byteswap logic in [`bswap_buf`](../llama/compat/003-tensor-data-big-endian-byteswap.patch:29) is a buffer-walking transformation over loaded tensor data. Even though only specific fields are swapped, the loader still touches model data block-by-block.
 
-KV cache adds to RSS beyond the model weights. At `num_ctx=8192` with `granite3.3:2b`, expect ~3.5 GB total RSS.
+This kind of work tends to be limited by:
 
----
+- memory bandwidth
+- cache efficiency
+- buffer traversal overhead
 
-## 3. Model Load Time
+### Hypothesis
 
-### Data
+On `s390x`, **model load time will scale strongly with total tensor bytes touched**, and may be bottlenecked by data movement more than arithmetic.
 
-| Model | Load Time (s) | Notes |
-|-------|--------------|-------|
-| lfm2.5-thinking | 0.91 | Small model, fast load |
-| deepseek-r1:1.5b | 1.54–1.57 | Consistent across context sizes |
-| qwen2.5vl:3b | 2.88–2.89 | Stable |
-| qwen2.5-coder | 3.05 | |
-| qwen3-coder:30b | 8.82 | Large model |
-| gpt-oss:20b | 9.51–9.81 | Large model |
-| gemma4 | 10.33 | Highest load time observed |
+### Expected symptoms
 
-Source: [`logs/model_perf_test_001.md`](../logs/model_perf_test_001.md)
+- load time grows roughly with model size
+- different quant formats show different load costs even before inference begins
+- CPU utilization may not fully reflect the real limiting factor if memory traffic is dominant
 
-### Big-endian byte-swap overhead
+## Insight 3: steady-state generation performance is likely dominated by native CPU kernel quality
 
-All GGUF models from Ollama.com and HuggingFace are stored little-endian. The s390x build applies per-tensor byte-swap at load time via `gguf-big-endian-byteswap.patch`. This is logged as:
+### Why
 
-```
-handle_bigendian_bswap: big-endian host detected with little-endian GGUF; registering per-tensor bswap LoadOps
-```
+Once a model is loaded, Go mostly packages requests and streams responses. The actual compute occurs in the llama-server subprocess through calls such as [`Completion()`](../llm/llama_server.go:1481) and [`Chat()`](../llm/llama_server.go:1834), which send local HTTP requests to the native runtime.
 
-**Impact (measured):** For `llama3.2:3b` (255 tensors, 1.9 GB), the scalar build swaps all tensors in **~834 ms** total; the VXE2 build takes **~14,192 ms** (14.2s). The VXE2 discrepancy is anomalous — individual tensor durations range 0.01–508 ms suggesting cache-line bouncing or pipeline stalls in the VXE2 store path.
-**Subsequent loads:** Tensors are cached after first load — repeat inferences within `keep_alive` window do not re-swap.
-**Mitigation:** Keep `OLLAMA_KEEP_ALIVE` at 5m+ in production to avoid repeated load cycles. On VXE2, this is especially important given the 15s cold-load penalty on 3B models.
+The Go path does work, but it is relatively thin compared with token generation itself.
 
-Source: [`docs/gguf_s390x_notes.md`](gguf_s390x_notes.md)
+### Hypothesis
 
----
+If warm-run tokens/sec is poor on `s390x`, the main cause is likely **CPU-side llama.cpp / ggml execution**, especially:
 
-## 4. Quantization Format Impact
+- quantized dequantization paths
+- matrix multiplication kernels
+- attention and KV-cache memory traffic
+- architecture-generic fallback code that is not tuned for `s390x`
 
-### Throughput by quantization (Llama 3.2 1B)
+### Expected symptoms
 
-| Quant | Tok/s | RAM | Status |
-|-------|-------|-----|--------|
-| Q4_0 | ~104 (SmolLM proxy) | — | ✅ |
-| Q4_K_M | 17.6 | 1.5 GiB | ✅ |
-| Q5_K_M | 21.6 | 1.1 GiB | ✅ |
-| Q8_0 | 22.75 | 1.5 GiB | ✅ |
-| F16 | 4.9 | 2.5 GiB | ✅ |
-| Q2_K | 4.4 (median), 1.4–11.4 (range) | 781 MiB | ⚠️ |
-| IQ4_XS | — | — | ❌ |
+- warm generation throughput lags other CPU architectures even after load cost is excluded
+- prompt eval and decode phases both show CPU-heavy slowdown
+- performance varies significantly across quantization formats and model families
 
-Source: [`logs/model_test_001.md`](../logs/model_test_001.md)
+## Insight 4: missing or immature `s390x` SIMD specialization is a strong candidate bottleneck
 
-### Key findings
+### Why
 
-- **Q8_0 outperforms Q4_K_M** (22.75 vs 17.6 tok/s) — the AIU handles higher-precision formats more efficiently than expected. This is counter-intuitive vs x86 GPU behavior where smaller quantizations are usually faster.
-- **Q5_K_M is a good middle ground** — slightly better throughput than Q4_K_M with less RAM than Q8_0.
-- **F16 is slower than Q8_0** — the larger memory footprint (2.5 vs 1.5 GiB) reduces AIU cache efficiency.
-- **Q2_K is not production-ready** — 1.4–11.4 tok/s variance across 15 runs makes latency unpredictable. Root cause unknown; likely numerical instability in the dequantization path on big-endian.
-- **IQ4_XS fails at load time** — incompatible with the big-endian byteswap implementation. Not fixable without upstream llama.cpp changes.
+The architecture summary in [`docs/s390x_architecture_notes.md`](./s390x_architecture_notes.md) shows that `s390x` has meaningful vector capabilities, including endian-aware vector operations. That suggests the hardware can support better optimized data-parallel execution than a pure generic scalar path.
 
-### qwen2.5-coder anomaly
+### Hypothesis
 
-`qwen2.5-coder:latest` showed **1.91 prompt eval TPS** at 4096 context — far below other models of similar parameter count. Generation TPS (6.29) was within normal range. This suggests the bottleneck is specific to tokenizer or attention computation during prompt processing, not generation.
+Current steady-state CPU inference likely leaves performance on the table if key llama.cpp / ggml kernels are still using generic implementations rather than `s390x`-aware vectorized ones.
 
-Hypotheses:
-1. Unusual tokenizer vocabulary size causing slow embedding lookup
-2. Architecture-specific attention pattern (sliding window, grouped query) not optimized for s390x byteswap path
-3. Bug in the specific quantization variant shipped as `latest`
+### Expected symptoms
 
-**Status: unresolved.** Source: [`logs/model_perf_test_001.md`](../logs/model_perf_test_001.md)
+- poor CPU efficiency on hot tensor kernels
+- noticeable gap between theoretical hardware capability and observed tokens/sec
+- large improvement potential from architecture-specific kernel work
 
----
+## Insight 5: scheduler behavior may amplify `s390x` load penalties
 
-## 5. Library Path / llama-server Discovery
+### Why
 
-### The problem
+The scheduler only loads one model at a time, centered around [`activeLoading`](../server/sched.go:70), and model startup flows through [`processPending()`](../server/sched.go:231) and [`load()`](../server/sched.go:502).
 
-`ollama serve` searches for `llama-server` in a fixed set of paths at startup:
+When memory pressure forces evictions, the next request may trigger a full reload.
 
-```
-/workspace/ollama-s390x/llama-server
-/workspace/lib/ollama/llama-server
-/workspace/ollama-s390x/build/lib/ollama/llama-server
-/workspace/ollama-s390x/dist/linux-s390x/lib/ollama/llama-server
-/workspace/ollama-s390x/dist/linux_s390x/lib/ollama/llama-server
-```
+### Hypothesis
 
-The CMake build outputs to `build/llama-server-cpu_s390x/bin/` — **none of the default paths**. Without `OLLAMA_LIBRARY_PATH` set, ollama falls back to a no-op CPU stub that cannot run inference, and every model load returns:
+On `s390x`, **scheduler reload churn is more expensive than on little-endian systems**, because each reload re-pays the byteswap and non-`mmap` load costs.
 
-```
-500 Internal Server Error: llama-server process has terminated: exit status 127
-```
+### Expected symptoms
 
-### Fix
+- concurrent multi-model usage degrades sharply
+- `keepalive` and max-loaded-model policy have outsized impact
+- throughput under mixed workloads is worse than single-model warm performance suggests
 
-Set `OLLAMA_LIBRARY_PATH` to the directory containing `llama-server` and its `.so` files:
+## Insight 6: local HTTP and tokenization/template round-trips are secondary but real latency contributors
 
-```sh
-OLLAMA_LIBRARY_PATH=build/llama-server-cpu_s390x/bin ./ollama serve
-```
+### Why
 
-This is now set automatically in `make run` via the `LLAMA_BUILD_DIR` variable.
+The runner uses localhost HTTP for more than just generation:
 
-For installed deployments (`install.sh`), the install script creates `.so.0` symlinks and runs `ldconfig` so the system linker can find the libraries without `OLLAMA_LIBRARY_PATH`.
+- [`ApplyChatTemplate()`](../llm/llama_server.go:1788)
+- [`Tokenize()`](../llm/llama_server.go:2454)
+- [`Detokenize()`](../llm/llama_server.go:2459)
+- [`Embedding()`](../llm/llama_server.go:2263)
 
-Source: [`docs/install-sh-s390x-improvements.md`](install-sh-s390x-improvements.md), [`scripts/install.sh`](../scripts/install.sh)
+Also, the HTTP client in [`newLlamaServerHTTPClient()`](../llm/llama_server.go:187) disables keep-alives.
 
----
+### Hypothesis
 
-## 6. AIU Accelerator Behavior
+These overheads are probably **not the primary throughput bottleneck**, but they may meaningfully affect:
 
-The triframe benchmarks show all models reporting **100% GPU** even though `ollama ps` reports `total_vram="0 B"`. This is because the IBM AIU (Accelerator for AI / Spyre) is transparent to Ollama's scheduler — it appears as a CPU device but offloads matrix operations via the AIU driver.
+- short-prompt latency
+- time to first token
+- chat-style interactions with frequent prompt preparation
 
-### Implications
+### Expected symptoms
 
-- Ollama's `--gpu-layers` / `num_gpu` parameters have no effect on AIU utilization
-- AIU JIT-compiles the compute graph on first 1–2 inferences — exclude warmup runs from benchmarks
-- AIU VF contention: other workloads on the same LPAR compete for the 12 virtual functions, causing occasional throughput spikes down to 1–3 tok/s
-- Restarting `ollama serve` between models resets the AIU state cleanly
+- short requests look disproportionately expensive
+- first-token latency remains elevated even when steady-state decode is acceptable
+- localhost request overhead becomes more visible with smaller models
 
-Source: [`logs/model_test_001.md`](../logs/model_test_001.md)
+## Prioritized Bottleneck Hypotheses
 
----
+The current best-priority ranking is:
 
-## 7. Hypotheses to Investigate
+1. **cold model load overhead from non-`mmap` buffered reads plus big-endian byteswapping**
+2. **steady-state CPU inference throughput limited by generic or insufficiently optimized native kernels**
+3. **scheduler eviction/reload churn multiplying the already-high cold load cost**
+4. **memory bandwidth and cache locality limiting large-model load and inference efficiency**
+5. **local HTTP/tokenization/template overhead increasing latency for short interactive requests**
 
-| Hypothesis | How to test | Expected outcome |
-|-----------|-------------|-----------------|
-| VXE2 SIMD provides 2–4× speedup over scalar | Re-run on LinuxONE Community Cloud VM with `llama3.2:1b` or `llama3.2:3b` — CPU-only, no AIU contention | **Inconclusive on AIU hardware.** smollm:135m: +10.3% VXE2. llama3.2:3b: scalar +4.5% (VXE2 slower at inference; 7.6× slower at load). AIU dominates at ≥3B. CPU-only VM test needed. See `logs/benchmark_vxe2_vs_scalar_001.md`. |
-| OpenBLAS improves large-model throughput | Install `libopenblas-dev`, rebuild with `GGML_BLAS=ON` | 5–20% improvement on 7B+ models |
-| zDNN (z17+/AIU2) accelerator improves throughput | Build with `cpu_s390x_zdnn` preset on z17 hardware | Significant improvement for supported ops |
-| qwen2.5-coder 1.91 TPS is a tokenizer bug | Profile tokenizer separately, test with raw embeddings | Identify slow path in prompt eval |
-| Q2_K instability is a byteswap bug | Run Q2_K with `GGML_BIGENDIAN=OFF` (little-endian QEMU) | Confirm or rule out byteswap as root cause |
-| keep_alive=0 between tests eliminates AIU state contamination | Benchmark with explicit unload vs continuous | Cleaner inter-model comparison |
+## Recommended Validation Areas
 
----
+To confirm or reject the hypotheses above, the next profiling pass should separate at least these phases:
 
-## 8. Benchmark Data Sources
+### 1. cold load time
 
-| File | Contents |
-|------|---------|
-| [`logs/model_perf_test_001.md`](../logs/model_perf_test_001.md) | AIU-accelerated performance test — load time, prompt eval TPS, eval TPS, context scaling across 7 models |
-| [`logs/model_test_001.md`](../logs/model_test_001.md) | CPU-only functional + throughput test — 12 models, 7 quant formats, RAM usage |
-| [`logs/benchmark_vxe2_vs_scalar_001.md`](../logs/benchmark_vxe2_vs_scalar_001.md) | VXE2 vs scalar benchmark — 2 runs: smollm:135m (+10.3% VXE2) and llama3.2:3b (−4.5% VXE2 / scalar faster; VXE2 load 7.6× slower). Full raw data, methodology, cross-run summary. |
-| [`docs/model_compatibility_matrix.md`](model_compatibility_matrix.md) | Summary matrix — all tested models with tok/s, RAM, pass/fail status |
-| [`docs/gguf_s390x_notes.md`](gguf_s390x_notes.md) | GGUF endianness, quantization formats, SIMD notes |
-| [`docs/install-sh-s390x-improvements.md`](install-sh-s390x-improvements.md) | Library path and installer fix history |
+Measure from subprocess startup in [`startLlamaServer()`](../llm/llama_server.go:345) through readiness in [`WaitUntilRunning()`](../llm/llama_server.go:1234).
+
+### 2. warm first-token latency
+
+Measure after a model is already loaded, so byteswap/load cost is excluded.
+
+### 3. prompt evaluation versus decode
+
+Use the runtime metrics already surfaced by llama-server responses through [`Completion()`](../llm/llama_server.go:1668) and [`Chat()`](../llm/llama_server.go:1969) to distinguish:
+
+- prompt processing cost
+- token generation cost
+
+### 4. reload churn frequency
+
+Observe how often the scheduler evicts and reloads models through [`processPending()`](../server/sched.go:231) and [`processCompleted()`](../server/sched.go:373).
+
+### 5. quantization sensitivity
+
+Compare at least a few common GGUF formats because both byteswap cost and steady-state kernel performance may vary by type.
+
+## Bottom Line
+
+The clearest current conclusion is:
+
+- **`s390x` pays a structural model-load penalty because tensor data must be loaded through writable buffers and byteswapped on a big-endian host**
+- **after load, overall throughput is likely determined primarily by CPU-native llama.cpp / ggml efficiency rather than by the Go server layer**
+- **scheduler reload churn is likely more damaging on `s390x` than on little-endian systems because reload cost is materially higher**
+
+The most likely major bottlenecks are therefore:
+
+- load-time tensor byteswap and copy overhead
+- CPU inference kernel performance
+- model reload/eviction behavior under constrained memory

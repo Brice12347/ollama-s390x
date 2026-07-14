@@ -500,6 +500,7 @@ func (pending *LlmRequest) useLoadedRunner(runner *runnerRef, finished chan *Llm
 // load creates a new model based on req and loads it. If requireFull is true then the model must be loaded fully onto GPUs
 // (if any). Returns whether the scheduler needs to evict a model to make this one fit.
 func (s *Scheduler) load(req *LlmRequest, systemInfo ml.SystemInfo, gpus []ml.DeviceInfo, requireFull bool) bool {
+	loadStart := time.Now()
 	numParallel := max(int(envconfig.NumParallel()), 1)
 	completion := req.model.CheckCapabilities(model.CapabilityCompletion) == nil
 
@@ -530,6 +531,7 @@ func (s *Scheduler) load(req *LlmRequest, systemInfo ml.SystemInfo, gpus []ml.De
 		var err error
 		if !req.model.IsMLX() {
 			var loadErr error
+			modelMetadataStart := time.Now()
 			f, loadErr = llm.LoadModel(req.model.ModelPath, 1024)
 			if loadErr != nil {
 				slog.Info("failed to load model metadata", "model", req.model.ModelPath, "error", loadErr)
@@ -537,6 +539,7 @@ func (s *Scheduler) load(req *LlmRequest, systemInfo ml.SystemInfo, gpus []ml.De
 				s.loadedMu.Unlock()
 				return false
 			}
+			slog.Info("load phase timing", "phase", "model_metadata", "model", req.model.ModelPath, "duration", time.Since(modelMetadataStart))
 
 			predictedCtx := effectiveLlamaServerContext(req.opts.NumCtx, f, numParallel)
 			predicted := llm.PredictServerVRAM(req.model.ModelPath, f, predictedCtx)
@@ -580,6 +583,7 @@ func (s *Scheduler) load(req *LlmRequest, systemInfo ml.SystemInfo, gpus []ml.De
 
 			config := llamaServerConfigForModel(req.model)
 			config.ContextShift = req.contextShift
+			newServerStart := time.Now()
 			llama, err = s.newServerFn(systemInfo, loadGpus, req.model.ModelPath, f, req.model.AdapterPaths, req.model.ProjectorPaths, launchOpts, numParallel, config)
 			if err != nil {
 				// some older models are not compatible with newer versions of llama.cpp
@@ -589,6 +593,7 @@ func (s *Scheduler) load(req *LlmRequest, systemInfo ml.SystemInfo, gpus []ml.De
 					err = fmt.Errorf("%v: this model may be incompatible with your version of Ollama. If you previously pulled this model, try updating it by running `ollama pull %s`", err, req.model.ShortName)
 				}
 			}
+			slog.Info("load phase timing", "phase", "new_server", "model", req.model.ModelPath, "duration", time.Since(newServerStart))
 		} else {
 			modelName := req.model.ShortName
 			if slices.Contains(req.model.Config.Capabilities, "image") {
@@ -634,7 +639,9 @@ func (s *Scheduler) load(req *LlmRequest, systemInfo ml.SystemInfo, gpus []ml.De
 			"overhead", format.HumanBytes2(envconfig.GpuOverhead()))
 	}
 
+	llamaLoadStart := time.Now()
 	gpuIDs, err := llama.Load(req.ctx, systemInfo, loadGpus, requireFull)
+	slog.Info("load phase timing", "phase", "llama_load", "model", req.model.ModelPath, "duration", time.Since(llamaLoadStart))
 	if err != nil {
 		if errors.Is(err, llm.ErrLoadRequiredFull) {
 			if !requireFull {
@@ -748,6 +755,7 @@ iGPUScan:
 			s.expiredCh <- runner
 			return
 		}
+		slog.Info("load phase timing", "phase", "wait_until_running", "model", req.model.ModelPath, "duration", time.Since(loadStart))
 		slog.Debug("finished setting up", "runner", runner)
 		if runner.pid < 0 {
 			runner.pid = llama.Pid()

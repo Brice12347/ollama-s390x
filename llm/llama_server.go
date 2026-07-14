@@ -956,10 +956,12 @@ func legacyEmbeddingsWereRaw(kv ggml.KV) bool {
 }
 
 func (s *llamaServerRunner) startProcess() error {
+	startProcessStart := time.Now()
 	cmd, port, err := startLlamaServer(s.launch, s.output)
 	if err != nil {
 		return err
 	}
+	slog.Info("load phase timing", "phase", "start_process", "model", s.modelPath, "duration", time.Since(startProcessStart))
 
 	s.cmd = cmd
 	s.port = port
