@@ -15,7 +15,7 @@ to confirm the image is working.
 
 ## 1. Build the image
 
-Replace `<YOUR_ORG>` with your quay.io organisation or username (e.g.
+Replace `brice_patchou` with your quay.io organisation or username (e.g.
 `mycompany` → `quay.io/mycompany/ollama-s390x`).
 
 ```sh
@@ -23,7 +23,7 @@ podman build \
   --platform linux/s390x \
   --format oci \
   -f Containerfile \
-  -t quay.io/<YOUR_ORG>/ollama-s390x:latest \
+  -t quay.io/brice_patchou/ollama-s390x:latest \
   .
 ```
 
@@ -42,7 +42,7 @@ podman build \
   --format oci \
   -f Containerfile \
   --build-arg CMAKEVERSION=3.31.2 \
-  -t quay.io/<YOUR_ORG>/ollama-s390x:latest \
+  -t quay.io/brice_patchou/ollama-s390x:latest \
   .
 ```
 
@@ -68,16 +68,16 @@ This enables:
 podman login quay.io
 
 # Push
-podman push quay.io/<YOUR_ORG>/ollama-s390x:latest
+podman push quay.io/brice_patchou/ollama-s390x:latest
 ```
 
 To push a versioned tag alongside `latest`:
 
 ```sh
-podman tag quay.io/<YOUR_ORG>/ollama-s390x:latest \
-           quay.io/<YOUR_ORG>/ollama-s390x:0.1.0
+podman tag quay.io/brice_patchou/ollama-s390x:latest \
+           quay.io/brice_patchou/ollama-s390x:0.1.0
 
-podman push quay.io/<YOUR_ORG>/ollama-s390x:0.1.0
+podman push quay.io/brice_patchou/ollama-s390x:0.1.0
 ```
 
 ---
@@ -89,7 +89,7 @@ podman run -d \
   --name ollama \
   -p 127.0.0.1:11434:11434 \
   -v ollama-data:/home/ollama/.ollama \
-  quay.io/<YOUR_ORG>/ollama-s390x:latest
+  quay.io/brice_patchou/ollama-s390x:latest
 ```
 
 | Flag | Purpose |
@@ -151,7 +151,7 @@ podman exec ollama sh -c \
 #!/bin/sh
 set -e
 
-IMAGE="quay.io/<YOUR_ORG>/ollama-s390x:latest"
+IMAGE="quay.io/brice_patchou/ollama-s390x:latest"
 
 # 1. Build
 podman build --platform linux/s390x --format oci -f Containerfile -t "$IMAGE" .

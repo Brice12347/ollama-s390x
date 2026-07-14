@@ -4,16 +4,16 @@
 # Build:
 #   podman build --platform linux/s390x --format oci \
 #     -f Containerfile \
-#     -t quay.io/<YOUR_ORG>/ollama-s390x:latest .
+#     -t quay.io/brice_patchou/ollama-s390x:latest .
 #
 # Run:
 #   podman run -d --name ollama \
 #     -p 127.0.0.1:11434:11434 \
 #     -v ollama-data:/home/ollama/.ollama \
-#     quay.io/<YOUR_ORG>/ollama-s390x:latest
+#     quay.io/brice_patchou/ollama-s390x:latest
 #
 # Push:
-#   podman push quay.io/<YOUR_ORG>/ollama-s390x:latest
+#   podman push quay.io/brice_patchou/ollama-s390x:latest
 
 ARG CMAKEVERSION=3.31.2
 ARG NINJAVERSION=1.12.1
