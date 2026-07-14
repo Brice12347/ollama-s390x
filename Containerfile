@@ -26,9 +26,6 @@ ARG NINJAVERSION=1.12.1
 # ---------------------------------------------------------------------------
 FROM --platform=linux/s390x ubuntu:24.04 AS base-s390x
 
-ARG CMAKEVERSION
-ARG NINJAVERSION
-
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -39,21 +36,13 @@ RUN apt-get update \
         gcc \
         g++ \
         make \
+        cmake \
+        ninja-build \
         libopenblas-dev \
     && rm -rf /var/lib/apt/lists/*
-
-# Install CMake from upstream (Ubuntu 24.04 ships 3.28; we need 3.24+ — already
-# satisfied, but pin to the same version used in the existing Dockerfile for
-# reproducibility).
-RUN curl -fsSL \
-        https://github.com/Kitware/CMake/releases/download/v${CMAKEVERSION}/cmake-${CMAKEVERSION}-linux-$(uname -m).tar.gz \
-    | tar xz -C /usr/local --strip-components 1
-
-# Install Ninja
-RUN curl -fsSL -o /tmp/ninja.zip \
-        https://github.com/ninja-build/ninja/releases/download/v${NINJAVERSION}/ninja-linux.zip \
-    && unzip /tmp/ninja.zip -d /usr/local/bin \
-    && rm /tmp/ninja.zip
+# CMake 3.28 and Ninja 1.11 ship in Ubuntu 24.04 noble — both satisfy the
+# ≥3.24 requirement. No pre-built s390x binary exists on cmake.org, so we
+# use the distro package instead. The ARGs are kept for documentation only.
 
 ENV CMAKE_GENERATOR=Ninja
 ENV LDFLAGS=-s
