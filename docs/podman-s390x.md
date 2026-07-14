@@ -21,7 +21,7 @@ Replace `brice_patchou` with your quay.io organisation or username (e.g.
 ```sh
 podman build \
   --platform linux/s390x \
-  --format oci \
+  --format docker \
   -f Containerfile \
   -t quay.io/brice_patchou/ollama-s390x:latest \
   .
@@ -39,7 +39,7 @@ Override with `--build-arg`, for example:
 ```sh
 podman build \
   --platform linux/s390x \
-  --format oci \
+  --format docker \
   -f Containerfile \
   --build-arg CMAKEVERSION=3.31.2 \
   -t quay.io/brice_patchou/ollama-s390x:latest \

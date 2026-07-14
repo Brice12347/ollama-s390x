@@ -2,7 +2,7 @@
 # Containerfile — Ollama for IBM Z / LinuxONE (s390x)
 #
 # Build:
-#   podman build --platform linux/s390x --format oci \
+#   podman build --platform linux/s390x --format docker \
 #     -f Containerfile \
 #     -t quay.io/brice_patchou/ollama-s390x:latest .
 #
