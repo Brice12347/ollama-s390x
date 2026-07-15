@@ -625,8 +625,10 @@ else()
                 LIST_DIRECTORIES false
                 \"\${_dir}/libggml-cpu*\"
                 \"\${_dir}/libggml-blas*\"
+                \"\${_dir}/libggml-zdnn*\"
                 \"\${_dir}/ggml-cpu*.dll\"
                 \"\${_dir}/ggml-blas*.dll\"
+                \"\${_dir}/ggml-zdnn*.dll\"
             )
             list(APPEND _cpu_backends \${_dir_cpu_backends})
         endforeach()
