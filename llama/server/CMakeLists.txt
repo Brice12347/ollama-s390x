@@ -190,7 +190,17 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "s390x" AND NOT OLLAMA_S390X_VXE)
 endif()
 
 if(OLLAMA_S390X_ZDNN AND CMAKE_SYSTEM_PROCESSOR MATCHES "s390x")
+    # Set both the cache entry AND the normal variable.
+    # FetchContent_MakeAvailable uses add_subdirectory internally; the child
+    # CMakeLists inherits normal variables from the parent scope, but CMake's
+    # option() only skips writing its default when the variable already exists
+    # in the CMakeCache.txt on disk.  On the very first configure of the
+    # _deps/llama_cpp-build directory, GGML_ZDNN is absent from that cache file,
+    # so option(GGML_ZDNN ... OFF) writes OFF into it and overrides our FORCE.
+    # Setting it as a plain variable as well makes it visible to the option()
+    # guard check (which also tests the non-cache variable), preventing the reset.
     set(GGML_ZDNN ON CACHE BOOL "s390x zDNN/zAIU co-processor (set by OLLAMA_S390X_ZDNN)" FORCE)
+    set(GGML_ZDNN ON)
     message(STATUS "  GGML_ZDNN forced ON (OLLAMA_S390X_ZDNN=ON)")
 endif()
 
