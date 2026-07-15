@@ -1,9 +1,84 @@
 # OpenShift / KServe Feasibility for Ollama s390x
 
-**Date:** 2026-07-14
+**Date:** 2026-07-14 (updated 2026-07-15)
 **Author:** Justin Veltri
 **Sprint:** Sprint 4 — Performance + UX + Optional Integration
 **Status:** Cluster access confirmed — `ollama` namespace exists on zCX OpenShift
+
+---
+
+## Day 31 Findings — Is OpenShift/KServe Integration Easy to Use?
+
+> **Daily Scrum question (Day 31):** Is OpenShift/KServe integration easy to use?
+
+**Short answer:** Moderately easy — the software stack is well-suited, but three
+sequential prerequisites must be cleared before anything runs on the cluster.
+
+### Verdict by integration path
+
+| Path | Technical difficulty | Remaining blockers | Sprint 4 realistic? |
+|------|---------------------|--------------------|---------------------|
+| **Option A** — plain `Deployment` + `Route` | **Low** | Container image (Brice, Day 31); SCC check | ✅ Yes — 1–2 days |
+| **Option B** — RHOAI `ServingRuntime` + `InferenceService` | **Low-medium** | Container image + RHOAI CRD confirmation | ✅ Yes — 1–3 days |
+| **Option C** — vanilla KServe (no RHOAI) | Medium | RHOAI absent; need RawDeployment config | ⚠️ Contingency only |
+
+### What makes it *easier* than expected
+
+1. **No protocol adapter needed.** The initial concern was that KServe enforces
+   the v2 inference protocol (Open Inference Protocol). RHOAI `ServingRuntime`
+   does not validate inference protocol — it routes raw HTTP to port `11434`.
+   Ollama's API works as-is.
+2. **Cluster already exists.** The `ollama` namespace on the zCX Ecosystem cluster
+   is pre-created and accessible. No provisioning delay.
+3. **s390x scheduling is standard.** A `nodeSelector: kubernetes.io/arch: s390x`
+   is all that is required — no custom scheduler or device plugin.
+4. **The `ServingRuntime` manifest is already written.** Brice's manifest was
+   reviewed, annotated, and confirmed structurally correct. Apply once, reuse for
+   any model.
+
+### What makes it *harder* than expected
+
+1. **The container image doesn't exist yet.** All three options are blocked on
+   Brice's Day 31 task. Nothing can be deployed until the image is built and pushed
+   to a registry accessible from the cluster.
+2. **Model storage requires a decision.** Models cannot be baked into the image
+   (too large). A `PersistentVolumeClaim` strategy is needed — either pre-populate
+   via a temporary pod or pull at pod startup (requires outbound internet from the
+   cluster).
+3. **SCC is untested.** The `restricted` SCC (OpenShift default) runs containers
+   as a random UID. The `/.ollama/models` root-anchored path in the `ServingRuntime`
+   manifest must be writable by that UID. The Dockerfile `chmod 775` should handle
+   this, but it requires empirical confirmation.
+4. **RHOAI/ODH presence is unconfirmed.** Option B requires the `ServingRuntime`
+   CRD. One `oc` command confirms or denies it:
+   ```sh
+   oc get crd servingruntimes.serving.kserve.io
+   ```
+   If absent, fall back to Option A.
+
+### Implementation complexity breakdown
+
+| Component | Effort | Owner | Status |
+|-----------|--------|-------|--------|
+| Container image (`ollama-ubi9:s390x`) | ~4 h | Brice | 🔲 Day 31 target |
+| Push to registry (`quay.io/<user>/`) | ~1 h | Brice | 🔲 Day 31 target |
+| Confirm RHOAI CRDs present | ~5 min | Justin | 🔲 Needs `oc` access |
+| Apply `ServingRuntime` manifest | ~5 min | Justin | 🔲 Blocked on image |
+| Apply `InferenceService` manifest | ~10 min | Justin | 🔲 Blocked on image |
+| Pre-populate model PVC | ~30 min | Justin/Brice | 🔲 Needs cluster access |
+| Confirm s390x node scheduling | ~5 min | Justin | 🔲 Needs `oc` access |
+| SCC / permission validation | ~1 h | Justin/Brice | 🔲 Needs live pod |
+| End-to-end API test via Route | ~30 min | Justin | 🔲 Blocked on above |
+
+**Total realistic effort (both interns):** ~1 day once the container image is ready.
+
+### Day 31 action items
+
+- [x] `docs/openshift_feasibility.md` created and manifests documented
+- [ ] Brice: build and push `ollama-ubi9:s390x` container image
+- [ ] Justin: confirm RHOAI CRD availability (`oc get crd servingruntimes...`)
+- [ ] Justin: confirm s390x node labels (`oc get nodes -L kubernetes.io/arch`)
+- [ ] Justin: clarify Quay.io registry path (fills `<username>` placeholder)
 
 ---
 
