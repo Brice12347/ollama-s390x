@@ -1,0 +1,29 @@
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: ollama
+  labels:
+    opendatahub.io/dashboard: "true"
+  annotations:
+    openshift.io/display-name: "Ollama (s390x)"
+spec:
+  builtInAdapter:
+    modelLoadingTimeoutMillis: 90000
+  containers:
+    - name: kserve-container
+      image: quay.io/brice_patchou/ollama-s390x:kserve
+      env:
+        - name: OLLAMA_MODELS
+          value: "/.ollama/models"
+        - name: OLLAMA_HOST
+          value: "0.0.0.0"
+        - name: OLLAMA_KEEP_ALIVE
+          value: "-1m"
+      ports:
+        - containerPort: 11434
+          name: http1
+          protocol: TCP
+  multiModel: false
+  supportedModelFormats:
+    - autoSelect: true
+      name: any
