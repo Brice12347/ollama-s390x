@@ -25,7 +25,6 @@ RUN dnf install -y --nodocs \
         curl \
         unzip \
         git \
-        ccache \
         gcc \
         gcc-c++ \
         make \
@@ -48,8 +47,7 @@ COPY LLAMA_CPP_VERSION .
 COPY llama/server llama/server
 COPY llama/compat llama/compat
 
-RUN --mount=type=cache,target=/root/.ccache \
-    cmake -S llama/server --preset cpu_s390x \
+RUN cmake -S llama/server --preset cpu_s390x \
         && cmake --build build/llama-server-cpu_s390x -- -l $(nproc) \
         && cmake --install build/llama-server-cpu_s390x --component llama-server --strip
 
