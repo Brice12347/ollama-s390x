@@ -5,7 +5,7 @@ metadata:
   labels:
     opendatahub.io/dashboard: "true"
   annotations:
-    openshift.io/display-name: "Ollama (s390x)"
+    openshift.io/display-name: "Ollama on s390x CPU inference only"
 spec:
   builtInAdapter:
     modelLoadingTimeoutMillis: 90000
