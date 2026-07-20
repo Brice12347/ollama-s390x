@@ -14,27 +14,25 @@ ARG NINJAVERSION=1.12.1
 
 # ---------------------------------------------------------------------------
 # Stage 1 — base-s390x
-#   Toolchain layer: GCC + OpenBLAS + CMake + Ninja on Ubuntu 24.04 s390x.
-#   Ubuntu 24.04 (Noble) ships gcc-13, clang-18, and libopenblas-dev for s390x
-#   directly in the ports mirror — no extra repos required.
+#   Toolchain layer: GCC + OpenBLAS + CMake + Ninja on UBI 9 s390x.
+#   UBI 9 (ubi9) ships gcc, make, cmake, and openblas-devel via the
+#   standard UBI + CodeReady Linux Builder repos.
 # ---------------------------------------------------------------------------
-FROM --platform=linux/s390x ubuntu:24.04 AS base-s390x
+FROM --platform=linux/s390x registry.redhat.io/ubi9/ubi:latest AS base-s390x
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+RUN dnf install -y --nodocs \
         ca-certificates \
         curl \
         unzip \
         git \
-        ccache \
         gcc \
-        g++ \
+        gcc-c++ \
         make \
         cmake \
         ninja-build \
-        pkg-config \
-        libopenblas-dev \
-    && rm -rf /var/lib/apt/lists/*
+        pkgconfig \
+        openblas-devel \
+    && dnf clean all
 
 ENV CMAKE_GENERATOR=Ninja
 ENV LDFLAGS=-s
@@ -49,8 +47,7 @@ COPY LLAMA_CPP_VERSION .
 COPY llama/server llama/server
 COPY llama/compat llama/compat
 
-RUN --mount=type=cache,target=/root/.ccache \
-    cmake -S llama/server --preset cpu_s390x \
+RUN cmake -S llama/server --preset cpu_s390x \
         && cmake --build build/llama-server-cpu_s390x -- -l $(nproc) \
         && cmake --install build/llama-server-cpu_s390x --component llama-server --strip
 
@@ -84,7 +81,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 #   Red Hat UBI 9 minimal satisfies OpenShift AI / KServe image policy.
 #   microdnf is the package manager in ubi-minimal.
 # ---------------------------------------------------------------------------
-FROM --platform=linux/s390x registry.access.redhat.com/ubi9/ubi-minimal:latest
+FROM --platform=linux/s390x registry.redhat.io/ubi9/ubi-minimal:latest
 
 RUN microdnf install -y openblas --nodocs \
     && microdnf clean all
