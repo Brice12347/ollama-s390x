@@ -88,15 +88,15 @@ die() {
   exit 1
 }
 
-# Floating-point division via bc, 3 decimal places
-bc_div() {
-  # bc_div <numerator> <denominator>
-  echo "scale=3; $1 / $2" | bc 2>/dev/null || echo "0"
+# Floating-point division via awk, 3 decimal places
+awk_div() {
+  # awk_div <numerator> <denominator>
+  awk -v n="$1" -v d="$2" 'BEGIN { if (d==0) print "0"; else printf "%.3f\n", n/d }' 2>/dev/null || echo "0"
 }
 
 # Nanoseconds → milliseconds (3 dp)
 ns_to_ms() {
-  bc_div "$1" "1000000"
+  awk_div "$1" "1000000"
 }
 
 # Nanoseconds → tokens-per-second given a token count
@@ -108,7 +108,7 @@ tps() {
     echo "0"
     return
   fi
-  echo "scale=3; ${count} / (${dur_ns} / 1000000000)" | bc 2>/dev/null || echo "0"
+  awk -v c="${count}" -v d="${dur_ns}" 'BEGIN { if (d==0) print "0"; else printf "%.3f\n", c / (d / 1000000000) }' 2>/dev/null || echo "0"
 }
 
 # Compute median of a bash array of numbers
@@ -157,12 +157,12 @@ MODEL_SAFE="${MODEL_SAFE//\//-}"
 
 log_info "Running pre-flight checks..."
 
-for cmd in curl jq bc; do
+for cmd in curl jq awk; do
   if ! command -v "$cmd" &>/dev/null; then
     die "Required tool '${cmd}' not found. Install it and retry."
   fi
 done
-log_ok "curl, jq, bc all available."
+log_ok "curl, jq, awk all available."
 
 # =============================================================================
 # PRE-FLIGHT CHECKS — Ollama server reachable
@@ -364,7 +364,7 @@ if date +%N &>/dev/null 2>&1 && [ "$(date +%N)" != "%N" ]; then
     FIRST_LINE=$(head -n1 "${TTFT_TMPFILE}" 2>/dev/null || true)
     if [ -n "${FIRST_LINE}" ]; then
       T_FIRST_NS=$(date +%s%N)
-      TTFT_MS=$(echo "scale=3; (${T_FIRST_NS} - ${T_START_NS}) / 1000000" | bc 2>/dev/null || echo "N/A")
+      TTFT_MS=$(awk -v a="${T_FIRST_NS}" -v b="${T_START_NS}" 'BEGIN { printf "%.3f\n", (a - b) / 1000000 }' 2>/dev/null || echo "N/A")
       break
     fi
     sleep 0.01
@@ -412,7 +412,7 @@ if [ -n "${PS_RESP}" ]; then
     jq -r --arg m "${MODEL}" \
       '[.models[] | select(.name == $m)] | first | .size // 0' 2>/dev/null || echo "0")
   if [ "${MODEL_SIZE_BYTES:-0}" -gt 0 ] 2>/dev/null; then
-    MODEL_SIZE_MIB=$(echo "scale=1; ${MODEL_SIZE_BYTES} / 1048576" | bc 2>/dev/null || echo "N/A")
+    MODEL_SIZE_MIB=$(awk -v b="${MODEL_SIZE_BYTES}" 'BEGIN { printf "%.1f\n", b / 1048576 }' 2>/dev/null || echo "N/A")
     log_ok "Model size (/api/ps): ${MODEL_SIZE_MIB} MiB"
   else
     log_warn "/api/ps returned no size for model '${MODEL}' — model may not be loaded."
@@ -451,8 +451,8 @@ if [ -n "${OLLAMA_PID}" ] && [ -r "/proc/${OLLAMA_PID}/status" ]; then
   VMPEAK_KB=$(grep '^VmPeak:' "/proc/${OLLAMA_PID}/status" | awk '{print $2}' || echo "0")
 
   if [ "${VMRSS_KB:-0}" -gt 0 ] 2>/dev/null; then
-    MEMORY_VMRSS_MIB=$(echo "scale=1; ${VMRSS_KB} / 1024" | bc 2>/dev/null || echo "N/A")
-    MEMORY_VMPEAK_MIB=$(echo "scale=1; ${VMPEAK_KB} / 1024" | bc 2>/dev/null || echo "N/A")
+    MEMORY_VMRSS_MIB=$(awk -v k="${VMRSS_KB}" 'BEGIN { printf "%.1f\n", k / 1024 }' 2>/dev/null || echo "N/A")
+    MEMORY_VMPEAK_MIB=$(awk -v k="${VMPEAK_KB}" 'BEGIN { printf "%.1f\n", k / 1024 }' 2>/dev/null || echo "N/A")
     log_ok "VmRSS: ${MEMORY_VMRSS_MIB} MiB  |  VmPeak: ${MEMORY_VMPEAK_MIB} MiB  (PID ${OLLAMA_PID})"
   else
     log_warn "VmRSS read as zero — /proc/${OLLAMA_PID}/status may be stale."
