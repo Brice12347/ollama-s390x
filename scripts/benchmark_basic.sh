@@ -279,24 +279,28 @@ log_info "=== METRIC 2: Model Load Time (cold) ==="
 # Helper — unload model by posting with keep_alive=0
 unload_model() {
   log_info "Unloading model '${MODEL}' from memory (keep_alive=0)..."
-  curl -sf --max-time 30 -X POST "${OLLAMA_HOST}/api/generate" \
+  curl -sf --max-time 60 -X POST "${OLLAMA_HOST}/api/generate" \
     -H 'Content-Type: application/json' \
     -d "{\"model\":\"${MODEL}\",\"prompt\":\"\",\"keep_alive\":0}" \
     &>/dev/null || log_warn "Unload request failed (model may not have been loaded)."
-  sleep 1
+  # Wait for server to fully evict the model before proceeding
+  sleep 3
 }
 
-# Helper — run a single non-streaming generate request and return the full JSON
-# Usage: run_generate  →  prints JSON to stdout
+# Helper — run a single non-streaming generate request and return the full JSON.
+# The server may return multiple NDJSON lines even with stream:false; the final
+# line is the one with "done":true and all duration fields populated.
+# Usage: run_generate  →  prints the done:true JSON object to stdout
 run_generate() {
-  curl -sf --max-time 120 -X POST "${OLLAMA_HOST}/api/generate" \
+  curl -sf --max-time 300 -X POST "${OLLAMA_HOST}/api/generate" \
     -H 'Content-Type: application/json' \
     -d "{
           \"model\": \"${MODEL}\",
           \"prompt\": \"${PROMPT}\",
           \"stream\": false,
           \"options\": ${INFER_OPTIONS}
-        }"
+        }" \
+  | awk 'END{print}'
 }
 
 # Cold load measurement — ensure model is NOT in memory first
