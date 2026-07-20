@@ -1,7 +1,7 @@
 apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
-  name: ollama
+  name: ollama-s390x
   labels:
     opendatahub.io/dashboard: "true"
   annotations:
