@@ -36,4 +36,4 @@ USER 1001
 EXPOSE 8080
 
 # KServe expects the container to listen on 8080 by default
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
