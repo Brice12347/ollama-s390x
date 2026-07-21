@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.6
-ARG BASE_IMAGE=registry.access.redhat.com/ubi9/python-312:latest
+ARG BASE_IMAGE=image-registry.openshift-image-registry.svc:5000/openshift/python:3.12-minimal-ubi9
 FROM ${BASE_IMAGE}
 
 LABEL name="t9-kserve-runtime" \

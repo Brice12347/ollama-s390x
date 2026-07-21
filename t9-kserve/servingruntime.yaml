@@ -19,7 +19,7 @@ spec:
     - v1
   containers:
     - name: kserve-container
-      image: quay.io/brice_patchou/ollama-s390x:t9-kserve-runtime-1.0-s390x
+      image: image-registry.openshift-image-registry.svc:5000/project-ollama/ollama-s390x:t9-kserve-runtime-1.0-s390x
       imagePullPolicy: Always
       ports:
         - containerPort: 8080
