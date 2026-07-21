@@ -15,7 +15,7 @@ WORKDIR /app
 
 # Install runtime deps
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && \
+RUN /opt/app-root/bin/pip install --no-cache-dir -r requirements.txt && \
     microdnf clean all || true
 
 # Application
@@ -36,4 +36,4 @@ USER 1001
 EXPOSE 8080
 
 # KServe expects the container to listen on 8080 by default
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+CMD ["/opt/app-root/bin/python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
