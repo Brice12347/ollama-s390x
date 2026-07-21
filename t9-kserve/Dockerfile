@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.6
-ARG BASE_IMAGE=image-registry.openshift-image-registry.svc:5000/openshift/python:3.12-minimal-ubi9
+ARG BASE_IMAGE=registry.redhat.io/ubi9/python-312:latest
 FROM ${BASE_IMAGE}
 
 LABEL name="t9-kserve-runtime" \
@@ -36,4 +36,4 @@ USER 1001
 EXPOSE 8080
 
 # KServe expects the container to listen on 8080 by default
-CMD ["/opt/app-root/bin/python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+CMD ["/opt/app-root/bin/python", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8080", "--workers", "1"]
