@@ -1,40 +1,31 @@
-# syntax=docker/dockerfile:1.6
-ARG BASE_IMAGE=registry.redhat.io/ubi9/python-312:1-75
-FROM ${BASE_IMAGE}
+FROM registry.access.redhat.com/ubi9/python-312:latest
 
 LABEL name="t9-kserve-runtime" \
-      summary="T9 Word Prediction FastAPI for KServe on s390x" \
-      description="Custom KServe runtime for T9 predictive text" \
-      io.k8s.display-name="T9 KServe Runtime" \
-      maintainer="you@example.com"
+      summary="T9 Word Prediction FastAPI for KServe on s390x"
 
-# OpenShift runs as random UID (root group)
 USER 0
 
-WORKDIR /app
+WORKDIR /opt/app-root/src
 
-# Install runtime deps as the app user so packages land in the venv
+# Install dependencies into the image's virtualenv
 COPY requirements.txt .
-RUN python -m pip install --no-cache-dir --upgrade pip && \
-    python -m pip install --no-cache-dir -r requirements.txt && \
-    microdnf clean all || true
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Application
+# Application code
 COPY app/ ./app/
 COPY dictionary.txt ./dictionary.txt
 
-# Permissions for random UID + root group (OpenShift best practice)
-RUN chown -R 1001:0 /app && \
-    chmod -R g=u /app && \
-    chmod -R a+rX /app
+# OpenShift random UID compatibility
+RUN chown -R 1001:0 /opt/app-root/src && \
+    chmod -R g=u /opt/app-root/src
 
 ENV PYTHONUNBUFFERED=1 \
-    DICTIONARY_PATH=/app/dictionary.txt \
+    DICTIONARY_PATH=/opt/app-root/src/dictionary.txt \
     PORT=8080
 
 USER 1001
 
 EXPOSE 8080
 
-# KServe expects the container to listen on 8080 by default
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+# Use the venv's python/uvicorn explicitly
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
