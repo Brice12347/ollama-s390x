@@ -5,22 +5,20 @@ metadata:
   name: t9-predictor
   namespace: project-ollama
   annotations:
-    serving.kserve.io/deploymentMode: RawDeployment   # recommended on OpenShift AI
+    serving.kserve.io/deploymentMode: RawDeployment
     openshift.io/display-name: "T9 Word Predictor"
   labels:
     opendatahub.io/dashboard: "true"
 spec:
   predictor:
     minReplicas: 1
-    maxReplicas: 3
+    maxReplicas: 1
     model:
       modelFormat:
         name: t9
       runtime: t9-fastapi-runtime
       # No storageUri needed – dictionary is baked into the image
-      # If you want external dictionary:
-      # storageUri: "pvc://my-pvc/dictionary" or s3://...
-    resources:          # optional override
+    resources:
       requests:
         cpu: 200m
         memory: 512Mi
