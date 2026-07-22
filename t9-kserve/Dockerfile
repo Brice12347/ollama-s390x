@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.6
-ARG BASE_IMAGE=registry.redhat.io/ubi9/python-312:latest
+ARG BASE_IMAGE=registry.redhat.io/ubi9/python-312:1-75
 FROM ${BASE_IMAGE}
 
 LABEL name="t9-kserve-runtime" \
@@ -13,9 +13,10 @@ USER 0
 
 WORKDIR /app
 
-# Install runtime deps
+# Install runtime deps as the app user so packages land in the venv
 COPY requirements.txt .
-RUN /opt/app-root/bin/pip install --no-cache-dir -r requirements.txt && \
+RUN python -m pip install --no-cache-dir --upgrade pip && \
+    python -m pip install --no-cache-dir -r requirements.txt && \
     microdnf clean all || true
 
 # Application
@@ -36,4 +37,4 @@ USER 1001
 EXPOSE 8080
 
 # KServe expects the container to listen on 8080 by default
-CMD ["/opt/app-root/bin/python", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8080", "--workers", "1"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
