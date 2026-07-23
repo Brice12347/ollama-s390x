@@ -67,6 +67,191 @@ OLLAMA_DEBUG=1 curl -fsSL \
 
 > **Note:** Binaries are built against glibc 2.36 (Debian 12 / Ubuntu 22.04) for broad compatibility. Tested on z15 and z17 hardware.
 
+### OpenShift AI on IBM Z (s390x)
+
+This fork ships everything you need to run Ollama as a managed inference service on **OpenShift AI** (backed by KServe / OpenDataHub) running on **IBM Z (s390x)** hardware. Once deployed, any team on the cluster can call the Ollama REST API through a TLS-terminated OpenShift Route while keeping all data on-premises inside the IBM Z estate.
+
+> **Target cluster:** `ocpeco.pok.stglabs.ibm.com` | **Namespace:** `project-ollama` | **Auth:** `htpasswd` credentials from cluster admin
+
+#### What you get
+
+| Artifact | File | Purpose |
+|---|---|---|
+| KServe ServingRuntime | [`ollama-servingruntime.yaml`](ollama-servingruntime.yaml) | Registers Ollama as a model-serving runtime in the OpenShift AI Dashboard |
+| s390x container image | [`Dockerfile.kserve`](Dockerfile.kserve) | Multi-stage UBI 9 build: C++ inference backend + Go binary, non-root, VXE2-accelerated |
+| Published image | `quay.io/brice_patchou/ollama-s390x:kserve` | Ready-to-pull image for the ServingRuntime — no local build required |
+| T9 demo runtime | [`t9-kserve/`](t9-kserve/) | Self-contained FastAPI service used to validate KServe plumbing before deploying Ollama |
+
+#### Architecture
+
+```
+OpenShift AI  (ocpeco.pok.stglabs.ibm.com — IBM Z s390x)
+│
+├── Namespace: project-ollama
+│
+├── ServingRuntime: ollama-s390x          ← ollama-servingruntime.yaml
+│   └── Container: kserve-container
+│       └── quay.io/brice_patchou/ollama-s390x:kserve
+│
+├── InferenceService: <model-name>        ← one per model you want to serve
+│   └── storageUri → MinIO S3 bucket
+│
+├── MinIO (S3-compatible object store)    ← model files live here
+│   └── Exposed via OpenShift AI DataConnection
+│
+└── Route: <model-name>-predictor         ← auto-created, TLS-terminated
+    ├── https://<route>/api/generate      (Ollama-native)
+    ├── https://<route>/api/chat
+    └── https://<route>/v2/models/<model>/infer  (KServe V2)
+```
+
+#### Deploy in 5 steps
+
+**1. Log in to the cluster**
+
+```shell
+oc login https://api.ocpeco.pok.stglabs.ibm.com:6443
+oc project project-ollama
+```
+
+> Use `htpasswd` credentials from the cluster admin. Red Hat account login does not work on this cluster.
+
+**2. Register the ServingRuntime**
+
+```shell
+oc apply -f ollama-servingruntime.yaml
+```
+
+The runtime will appear in the OpenShift AI Dashboard under **Model Serving → Serving Runtimes**.
+
+**3. Upload a model to MinIO**
+
+```shell
+# Pull the model locally first
+ollama pull smollm:135m
+
+# Mirror the Ollama model store into the MinIO bucket
+mc alias set minio https://<minio-api-route> <ACCESS_KEY> <SECRET_KEY>
+mc mirror ~/.ollama/models minio/ollama-models/
+```
+
+> Find the MinIO Route URL in the OpenShift Console under **Networking → Routes**, filter by `minio-api`. Credentials are in the `minio-secret` Kubernetes Secret.
+
+**4. Create an InferenceService**
+
+```shell
+oc apply -f - <<'EOF'
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: ollama-smollm
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+spec:
+  predictor:
+    model:
+      modelFormat:
+        name: any
+      runtime: ollama-s390x
+      storageUri: s3://ollama-models/smollm/
+EOF
+
+# Wait for the pod to become Ready
+oc get pods -w
+```
+
+**5. Smoke test**
+
+```shell
+ROUTE=$(oc get route ollama-smollm-predictor -o jsonpath='{.spec.host}')
+
+curl -s https://$ROUTE/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{"model":"smollm:135m","prompt":"What is IBM Z?","stream":false}' \
+  | jq .response
+```
+
+#### Calling the deployed model
+
+The Ollama REST API is available at the KServe Route. No Ollama client library is required — plain HTTP works.
+
+**curl**
+
+```shell
+curl -s https://<route>/api/generate \
+  -H "Content-Type: application/json" \
+  -d '{"model":"smollm:135m","prompt":"Summarise this FFDC log: ...","stream":false}'
+```
+
+**Python (requests)**
+
+```python
+import requests
+
+resp = requests.post("https://<route>/api/generate", json={
+    "model": "smollm:135m",
+    "prompt": "Summarise this FFDC log: ...",
+    "stream": False,
+})
+print(resp.json()["response"])
+```
+
+**Python (OpenAI-compatible)**
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="https://<route>/v1", api_key="ollama")
+response = client.chat.completions.create(
+    model="smollm:135m",
+    messages=[{"role": "user", "content": "What is IBM Z?"}],
+)
+print(response.choices[0].message.content)
+```
+
+**From a Jupyter Workbench (internal service DNS)**
+
+```python
+import requests
+
+# Use the internal Kubernetes service DNS — no Route needed
+resp = requests.post(
+    "http://ollama-smollm-predictor.project-ollama.svc.cluster.local/api/generate",
+    json={"model": "smollm:135m", "prompt": "Summarise this FFDC log: ...", "stream": False},
+)
+print(resp.json()["response"])
+```
+
+#### Available endpoints
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/api/generate` | POST | Single-turn completion (Ollama-native) |
+| `/api/chat` | POST | Multi-turn chat (Ollama-native) |
+| `/api/tags` | GET | List loaded models |
+| `/v1/chat/completions` | POST | OpenAI-compatible chat |
+| `/v2/models/<model>/infer` | POST | KServe V2 inference protocol |
+
+#### Recommended models for s390x
+
+| Model | RAM | Gen TPS | Best for |
+|---|---|---|---|
+| `lfm2.5-thinking:latest` | ~3 GB | 46 | Reasoning tasks, FFDC analysis |
+| `deepseek-r1:1.5b` | ~2 GB | 22 | General tasks, low-latency CI |
+| `smollm:135m` | ~200 MB | ~100 | Health checks, smoke tests |
+
+> **Memory note:** `mmap` is disabled on s390x due to big-endian byte-swap requirements. Add 20–30% overhead to the model's nominal size when setting pod `resources.limits.memory` (e.g. a 2.5 GB Q4_K_M model may peak at ~3.5 GB RSS). See [`docs/openshift_feasibility.md`](docs/openshift_feasibility.md) for full sizing guidance.
+
+#### Further reading
+
+- [`docs/openshift_feasibility.md`](docs/openshift_feasibility.md) — full feasibility report, s390x considerations, open questions
+- [`docs/handoff.md`](docs/handoff.md) — E2E and FFDC team integration guide
+- [`ollama-servingruntime.yaml`](ollama-servingruntime.yaml) — ServingRuntime manifest
+- [`Dockerfile.kserve`](Dockerfile.kserve) — multi-stage s390x container build
+- [`t9-kserve/`](t9-kserve/) — T9 demo service used to validate KServe wiring
+
+
+
 ### Docker
 
 The official [Ollama Docker image](https://hub.docker.com/r/ollama/ollama) `ollama/ollama` is available on Docker Hub.
