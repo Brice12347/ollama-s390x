@@ -20,7 +20,7 @@ ARG NINJAVERSION=1.12.1
 # ---------------------------------------------------------------------------
 FROM --platform=linux/s390x registry.redhat.io/ubi9/ubi:latest AS base-s390x
 
-RUN dnf install -y --nodocs --allowerasing \
+RUN dnf install -y --nodocs \
         ca-certificates \
         curl \
         unzip \
