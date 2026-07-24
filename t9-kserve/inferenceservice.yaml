@@ -28,8 +28,5 @@ spec:
       storageUri: s3://models/ollama
       storage:
         key: ollama-mistral
-      resources:
-        requests:
-          cpu: "2"
-          memory: 4Gi
+      
         
