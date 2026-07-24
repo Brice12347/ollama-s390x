@@ -1,4 +1,4 @@
-# inferenceservice.yaml
+# inferenceservice.yaml — Ollama on s390x backed by MinIO model storage
 apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
@@ -7,18 +7,29 @@ metadata:
   annotations:
     serving.kserve.io/deploymentMode: RawDeployment
     openshift.io/display-name: "Ollama Inference Service"
+    serving.knative.dev/visibility: exposed
   labels:
     opendatahub.io/dashboard: "true"
 spec:
   predictor:
     minReplicas: 1
     maxReplicas: 1
+    serviceAccountName: default
     model:
       modelFormat:
         name: any
       runtime: ollama-fastapi-runtime
-      # No storageUri needed – model is pulled at runtime via ollama pull
-    resources:
-      requests:
-        cpu: 200m
-        memory: 512Mi
+      # storageUri — points to the MinIO bucket/prefix holding the model files.
+      # Format: s3://<bucket>/<path-inside-bucket>
+      # The KServe storage-initializer sidecar pulls these files into /mnt/models
+      # before the Ollama container starts. The bucket must exist in MinIO and
+      # the model files must be uploaded there before deploying this resource.
+      # Adjust the path to match whichever model you uploaded.
+      storageUri: s3://models/ollama
+      storage:
+        key: ollama-mistral
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+        

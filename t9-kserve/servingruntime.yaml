@@ -23,6 +23,7 @@ spec:
       imagePullPolicy: Always
       ports:
         - containerPort: 11434
+          name: http1
           protocol: TCP
       env:
         - name: OLLAMA_HOST
