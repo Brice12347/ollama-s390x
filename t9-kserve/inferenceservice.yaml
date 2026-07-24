@@ -27,6 +27,6 @@ spec:
       # Adjust the path to match whichever model you uploaded.
       storageUri: s3://models/ollama
       storage:
-        key: ollama-mistral
+        key: ollama-mistral1
       
         
