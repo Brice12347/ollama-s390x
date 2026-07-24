@@ -71,7 +71,7 @@ OLLAMA_DEBUG=1 curl -fsSL \
 
 This fork ships everything you need to run Ollama as a managed inference service on **OpenShift AI** (backed by KServe / OpenDataHub) running on **IBM Z (s390x)** hardware. Once deployed, any team on the cluster can call the Ollama REST API through a TLS-terminated OpenShift Route while keeping all data on-premises inside the IBM Z estate.
 
-> **Target cluster:** `ocpeco.pok.stglabs.ibm.com` | **Namespace:** `project-ollama` | **Auth:** `htpasswd` credentials from cluster admin
+> **Target cluster:** `<domain-name>` | **Namespace:** `project-ollama` | **Auth:** `htpasswd` credentials from cluster admin
 
 #### What you get
 
@@ -85,7 +85,7 @@ This fork ships everything you need to run Ollama as a managed inference service
 #### Architecture
 
 ```
-OpenShift AI  (ocpeco.pok.stglabs.ibm.com — IBM Z s390x)
+OpenShift AI  (IBM Z s390x)
 │
 ├── Namespace: project-ollama
 │
@@ -110,7 +110,7 @@ OpenShift AI  (ocpeco.pok.stglabs.ibm.com — IBM Z s390x)
 **1. Log in to the cluster**
 
 ```shell
-oc login https://api.ocpeco.pok.stglabs.ibm.com:6443
+oc login https://<your-openshift-cluster>:6443
 oc project project-ollama
 ```
 
