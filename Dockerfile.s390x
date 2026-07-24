@@ -18,11 +18,13 @@
 #   lightningcss which has no pre-built s390x binary and no pure-JS fallback.
 #   Fix: downgrade tailwindcss to v3 and patch all v4-specific config/CSS.
 # ---------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS frontend
+FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi9/nodejs-22 AS frontend
+
+USER 0
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+RUN dnf install -y git && dnf clean all
 
 COPY package.json package-lock.json ./
 # Install deps including the v4 tailwind (will be replaced below)
@@ -58,12 +60,10 @@ FROM --platform=linux/s390x registry.access.redhat.com/ubi9/python-312:latest
 
 USER 0
 
-# sqlite 3.34 ships with UBI 9 — too old for Alembic's DROP COLUMN migration
-# (requires 3.35+). Install a newer sqlite build from the EPEL/CRB mirror.
-# We pull the RPM directly from the Fedora 38 buildroot which ships 3.40+.
-# --allowerasing lets dnf replace curl-minimal (shipped by UBI 9) with full curl.
-# sqlite-libs upgrade: UBI 9 ships 3.34 which is too old for Alembic DROP COLUMN
-# (requires 3.35+). Pull 3.43 from Fedora 40 which is still actively mirrored.
+# UBI 9 ships SQLite 3.34 which is too old for Alembic's DROP COLUMN migration
+# (requires 3.35+). All pre-built RPMs for newer SQLite require GLIBC 2.38 but
+# UBI 9 only has GLIBC 2.34, so we compile SQLite 3.43.2 from source instead.
+# --allowerasing replaces curl-minimal (UBI 9 default) with full curl.
 RUN dnf install -y --nodocs --allowerasing \
         gcc \
         gcc-c++ \
@@ -72,10 +72,18 @@ RUN dnf install -y --nodocs --allowerasing \
         git \
         curl \
         jq \
-    && dnf install -y --nodocs \
-        https://dl.fedoraproject.org/pub/fedora/linux/releases/40/Everything/s390x/os/Packages/s/sqlite-3.43.1-5.fc40.s390x.rpm \
-        https://dl.fedoraproject.org/pub/fedora/linux/releases/40/Everything/s390x/os/Packages/s/sqlite-libs-3.43.1-5.fc40.s390x.rpm \
-    && dnf clean all
+        make \
+        tcl \
+        libpq-devel \
+    && dnf clean all \
+    && curl -fsSL https://www.sqlite.org/2023/sqlite-autoconf-3430200.tar.gz \
+       | tar -xz \
+    && cd sqlite-autoconf-3430200 \
+    && ./configure --prefix=/usr --libdir=/usr/lib64 \
+    && make -j$(nproc) \
+    && make install \
+    && cd .. && rm -rf sqlite-autoconf-3430200 \
+    && ldconfig
 
 WORKDIR /opt/app-root/src
 
@@ -100,25 +108,39 @@ COPY backend/requirements-min.txt ./requirements.txt
 #
 # retrieval/web/duckduckgo.py → imported unconditionally by retrieval.py:
 #   ddgs
+# psycopg[binary] has no s390x wheel — replace with source-compiled psycopg
+RUN sed -i 's/psycopg\[binary\]/psycopg/' requirements.txt
 RUN pip3 install --no-cache-dir uv \
-    && uv pip install --system --no-cache-dir -r requirements.txt \
-    && uv pip install --system --no-cache-dir \
+    && uv pip install --system --no-cache-dir --python python3.12 -r requirements.txt \
+    && uv pip install --system --no-cache-dir --python python3.12 \
         boto3 \
         azure-storage-blob \
         azure-identity \
         google-cloud-storage \
         huggingface_hub \
         ddgs \
-        tiktoken
+        tiktoken \
+        validators \
+        markdown \
+        python-mimeparse \
+        joserfc \
+        Pillow \
+        pytz \
+        python-pptx \
+        fpdf2 \
+        ftfy \
+        ldap3
 
 # ---------------------------------------------------------------------------
 # Copy application files
 # ---------------------------------------------------------------------------
 COPY --from=frontend /app/build        /opt/app-root/src/build
-COPY --from=frontend /app/CHANGELOG.md /opt/app-root/src/CHANGELOG.md
 COPY --from=frontend /app/package.json /opt/app-root/src/package.json
 
 COPY backend/ /opt/app-root/src/
+
+# env.py looks for CHANGELOG.md inside the open_webui package directory
+COPY --from=frontend /app/CHANGELOG.md /opt/app-root/src/open_webui/CHANGELOG.md
 
 # ---------------------------------------------------------------------------
 # OpenShift SCC compliance

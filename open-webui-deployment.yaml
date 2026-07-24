@@ -33,7 +33,7 @@ spec:
       # Remove this initContainer once you switch to a persistent PVC.
       initContainers:
         - name: wipe-stale-db
-          image: quay.io/justinveltri/open-webui:s390x
+          image: quay.io/justinveltri/open-webui:s390x-v15
           imagePullPolicy: Always
           command: ["/bin/bash", "-c", "rm -f /opt/app-root/src/data/webui.db /opt/app-root/src/data/webui.db-shm /opt/app-root/src/data/webui.db-wal"]
           securityContext:
@@ -44,12 +44,12 @@ spec:
               mountPath: /opt/app-root/src/data
       containers:
         - name: open-webui
-          image: quay.io/justinveltri/open-webui:s390x
+          image: quay.io/justinveltri/open-webui:s390x-v15
           imagePullPolicy: Always
+          workingDir: /opt/app-root/src
           command: ["/bin/bash", "-c"]
           args:
             - |
-              export PYTHON_CMD=/usr/bin/python3.12
               exec /usr/bin/python3.12 -m uvicorn open_webui.main:app \
                 --host "${HOST:-0.0.0.0}" \
                 --port "${PORT:-8080}" \
