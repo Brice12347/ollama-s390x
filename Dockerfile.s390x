@@ -1,0 +1,153 @@
+# vim: filetype=dockerfile
+# Dockerfile.s390x — Open WebUI for IBM Z / LinuxONE (s390x), UBI 9 runtime
+#
+# Build (from inside ollama-dev Podman container on Triframe):
+#   podman build --platform linux/s390x --format docker \
+#     -f Dockerfile.s390x \
+#     -t quay.io/brice_patchou/open-webui:s390x .
+#
+# Push:
+#   podman push quay.io/brice_patchou/open-webui:s390x
+
+# ---------------------------------------------------------------------------
+# Stage 1 — frontend
+#   Builds the SvelteKit static bundle using the build host's native arch.
+#   Output is pure HTML/JS so the build platform does not matter.
+#
+#   Key s390x problem: Tailwind v4 (which upstream ships) depends on
+#   lightningcss which has no pre-built s390x binary and no pure-JS fallback.
+#   Fix: downgrade tailwindcss to v3 and patch all v4-specific config/CSS.
+# ---------------------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS frontend
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
+COPY package.json package-lock.json ./
+# Install deps including the v4 tailwind (will be replaced below)
+RUN npm ci --force
+
+# Downgrade Tailwind v4 → v3 (lightningcss native binary issue on s390x)
+# Also ensure postcss-import and autoprefixer are available for v3.
+RUN npm install --save-dev \
+        tailwindcss@">=3.4 <4" \
+        autoprefixer \
+        postcss-import
+
+# Copy source and the build-time patch script
+COPY . .
+COPY patch-tailwind-v3.cjs ./patch-tailwind-v3.cjs
+
+# Apply all Tailwind v3 compatibility patches in one step:
+#   • src/tailwind.css     — replaces v4 @import/@theme/@config/@custom-variant
+#   • postcss.config.js    — replaces @tailwindcss/postcss with tailwindcss+autoprefixer
+#   • tailwind.config.js   — injects gray-850 custom color
+RUN node patch-tailwind-v3.cjs
+
+# Build the SvelteKit frontend
+RUN npx vite build
+
+# ---------------------------------------------------------------------------
+# Stage 2 — Python backend (s390x)
+#   UBI 9 Python 3.12 — same base used in t9-kserve, confirmed s390x-capable.
+#   gcc + gcc-c++ + rust + cargo allow source-compiling any wheels that lack
+#   a pre-built s390x binary (tiktoken, brotlicffi, chromadb, etc.).
+# ---------------------------------------------------------------------------
+FROM --platform=linux/s390x registry.access.redhat.com/ubi9/python-312:latest
+
+USER 0
+
+# sqlite 3.34 ships with UBI 9 — too old for Alembic's DROP COLUMN migration
+# (requires 3.35+). Install a newer sqlite build from the EPEL/CRB mirror.
+# We pull the RPM directly from the Fedora 38 buildroot which ships 3.40+.
+# --allowerasing lets dnf replace curl-minimal (shipped by UBI 9) with full curl.
+# sqlite-libs upgrade: UBI 9 ships 3.34 which is too old for Alembic DROP COLUMN
+# (requires 3.35+). Pull 3.43 from Fedora 40 which is still actively mirrored.
+RUN dnf install -y --nodocs --allowerasing \
+        gcc \
+        gcc-c++ \
+        rust \
+        cargo \
+        git \
+        curl \
+        jq \
+    && dnf install -y --nodocs \
+        https://dl.fedoraproject.org/pub/fedora/linux/releases/40/Everything/s390x/os/Packages/s/sqlite-3.43.1-5.fc40.s390x.rpm \
+        https://dl.fedoraproject.org/pub/fedora/linux/releases/40/Everything/s390x/os/Packages/s/sqlite-libs-3.43.1-5.fc40.s390x.rpm \
+    && dnf clean all
+
+WORKDIR /opt/app-root/src
+
+# ---------------------------------------------------------------------------
+# Install Python dependencies
+# requirements-min.txt is Open WebUI's slim list — chat/auth/API surface,
+# no playwright, colbert-ai, torch, or RAG-heavy packages.
+# ---------------------------------------------------------------------------
+COPY backend/requirements-min.txt ./requirements.txt
+
+# Packages that are imported unconditionally at module load time but are
+# absent from requirements-min.txt. The app crashes on startup without them.
+#
+# storage/provider.py (top-level, no guard):
+#   boto3, azure-storage-blob, azure-identity, google-cloud-storage
+#
+# routers/retrieval.py (top-level import):
+#   tiktoken  — no s390x wheel; compiles from source via Rust (cargo is present)
+#
+# retrieval/utils.py (top-level import):
+#   huggingface_hub
+#
+# retrieval/web/duckduckgo.py → imported unconditionally by retrieval.py:
+#   ddgs
+RUN pip3 install --no-cache-dir uv \
+    && uv pip install --system --no-cache-dir -r requirements.txt \
+    && uv pip install --system --no-cache-dir \
+        boto3 \
+        azure-storage-blob \
+        azure-identity \
+        google-cloud-storage \
+        huggingface_hub \
+        ddgs \
+        tiktoken
+
+# ---------------------------------------------------------------------------
+# Copy application files
+# ---------------------------------------------------------------------------
+COPY --from=frontend /app/build        /opt/app-root/src/build
+COPY --from=frontend /app/CHANGELOG.md /opt/app-root/src/CHANGELOG.md
+COPY --from=frontend /app/package.json /opt/app-root/src/package.json
+
+COPY backend/ /opt/app-root/src/
+
+# ---------------------------------------------------------------------------
+# OpenShift SCC compliance
+#   chown 1001:0 + chmod g=u — same pattern as t9-kserve/Dockerfile
+# ---------------------------------------------------------------------------
+RUN mkdir -p /opt/app-root/src/data \
+    && chown -R 1001:0 /opt/app-root/src \
+    && chmod -R g=u    /opt/app-root/src
+
+USER 1001
+
+# ---------------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------------
+ENV PYTHONUNBUFFERED=1 \
+    PORT=8080 \
+    HOST=0.0.0.0 \
+    ENV=prod \
+    DOCKER=true \
+    OLLAMA_BASE_URL="http://ollama:11434" \
+    WEBUI_SECRET_KEY="" \
+    SCARF_NO_ANALYTICS=true \
+    DO_NOT_TRACK=true \
+    ANONYMIZED_TELEMETRY=false \
+    ENABLE_RAG_WEB_LOADER_SSL_VERIFICATION=false
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -sf http://localhost:8080/health | jq -ne 'input.status == true' || exit 1
+
+CMD ["bash", "start.sh"]

@@ -1,0 +1,160 @@
+---
+# Open WebUI — s390x OpenShift Deployment
+#
+# Apply with:
+#   oc apply -f open-webui-deployment.yaml -n project-ollama
+#
+# Prerequisites:
+#   - Ollama KServe InferenceService already running in the same namespace
+#   - Set OLLAMA_BASE_URL below to the Ollama service URL
+#     (internal: http://<inferenceservice-name>-predictor.<namespace>.svc.cluster.local:11434)
+#     (external route: https://<route-host>)
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-webui
+  namespace: project-ollama
+  labels:
+    app: open-webui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: open-webui
+  template:
+    metadata:
+      labels:
+        app: open-webui
+    spec:
+      # Wipe the data directory before the app starts so a stale / partially-
+      # migrated SQLite DB from a previous pod never blocks Alembic migrations.
+      # Safe with emptyDir because the volume is ephemeral per-pod anyway.
+      # Remove this initContainer once you switch to a persistent PVC.
+      initContainers:
+        - name: wipe-stale-db
+          image: quay.io/justinveltri/open-webui:s390x
+          imagePullPolicy: Always
+          command: ["/bin/bash", "-c", "rm -f /opt/app-root/src/data/webui.db /opt/app-root/src/data/webui.db-shm /opt/app-root/src/data/webui.db-wal"]
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: webui-data
+              mountPath: /opt/app-root/src/data
+      containers:
+        - name: open-webui
+          image: quay.io/justinveltri/open-webui:s390x
+          imagePullPolicy: Always
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              export PYTHON_CMD=/usr/bin/python3.12
+              exec /usr/bin/python3.12 -m uvicorn open_webui.main:app \
+                --host "${HOST:-0.0.0.0}" \
+                --port "${PORT:-8080}" \
+                --forwarded-allow-ips "*" \
+                --workers 1
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+          env:
+            # ----------------------------------------------------------------
+            # Point at the Ollama KServe InferenceService.
+            # Use the internal cluster DNS name to avoid the ingress hop.
+            # Format: http://<inferenceservice-name>-predictor.<namespace>.svc.cluster.local:11434
+            # ----------------------------------------------------------------
+            - name: OLLAMA_BASE_URL
+              value: "http://ollama-predictor.project-ollama.svc.cluster.local:11434"
+            # Generate a real secret: python3 -c "import secrets; print(secrets.token_hex(32))"
+            - name: WEBUI_SECRET_KEY
+              value: "change-me-to-a-real-secret"
+            - name: ENV
+              value: "prod"
+            - name: PORT
+              value: "8080"
+            - name: HOST
+              value: "0.0.0.0"
+            - name: DOCKER
+              value: "true"
+            # Disable RAG/vector store (chromadb removed for s390x compatibility)
+            - name: ENABLE_RAG_WEB_SEARCH
+              value: "false"
+            - name: VECTOR_DB
+              value: ""
+            - name: SCARF_NO_ANALYTICS
+              value: "true"
+            - name: DO_NOT_TRACK
+              value: "true"
+            - name: ANONYMIZED_TELEMETRY
+              value: "false"
+            # Force start.sh to use Python 3.12 (UBI default python3 is 3.9)
+            - name: PYTHON_CMD
+              value: "/usr/bin/python3.12"
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          volumeMounts:
+            - name: webui-data
+              mountPath: /opt/app-root/src/data
+      volumes:
+        - name: webui-data
+          # Use emptyDir for initial testing; replace with PVC for persistence
+          emptyDir: {}
+      # OpenShift will assign an arbitrary UID — image is chown 1001:0 + g=u
+      securityContext:
+        runAsNonRoot: true
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-webui
+  namespace: project-ollama
+  labels:
+    app: open-webui
+spec:
+  selector:
+    app: open-webui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+
+---
+# OpenShift Route — exposes Open WebUI externally with TLS termination
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: open-webui
+  namespace: project-ollama
+  labels:
+    app: open-webui
+spec:
+  to:
+    kind: Service
+    name: open-webui
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
