@@ -2,11 +2,11 @@
 apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
-  name: t9-predictor
+  name: ollama-predictor
   namespace: project-ollama
   annotations:
     serving.kserve.io/deploymentMode: RawDeployment
-    openshift.io/display-name: "T9 Word Predictor"
+    openshift.io/display-name: "Ollama Inference Service"
   labels:
     opendatahub.io/dashboard: "true"
 spec:
@@ -15,9 +15,9 @@ spec:
     maxReplicas: 1
     model:
       modelFormat:
-        name: t9
-      runtime: t9-fastapi-runtime
-      # No storageUri needed – dictionary is baked into the image
+        name: any
+      runtime: ollama-fastapi-runtime
+      # No storageUri needed – model is pulled at runtime via ollama pull
     resources:
       requests:
         cpu: 200m

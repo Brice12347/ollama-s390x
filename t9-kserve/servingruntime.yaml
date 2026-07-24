@@ -2,16 +2,16 @@
 apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
-  name: t9-fastapi-runtime
+  name: ollama-fastapi-runtime
   annotations:
-    openshift.io/display-name: "T9 FastAPI ServingRuntime (s390x)"
+    openshift.io/display-name: "Ollama ServingRuntime (s390x)"
     opendatahub.io/recommended-accelerators: '[]'   # CPU only
   labels:
     opendatahub.io/dashboard: "true"
 spec:
   multiModel: false
   supportedModelFormats:
-    - name: t9
+    - name: any
       version: "1"
       autoSelect: true
   protocolVersions:
@@ -19,14 +19,18 @@ spec:
     - v1
   containers:
     - name: kserve-container
-      image: image-registry.openshift-image-registry.svc:5000/project-ollama/ollama-s390x:t9-kserve-runtime-1.0-s390x
+      image: quay.io/brice_patchou/ollama-s390x:kserve
       imagePullPolicy: Always
       ports:
-        - containerPort: 8080
+        - containerPort: 11434
           protocol: TCP
       env:
-        - name: DICTIONARY_PATH
-          value: /opt/app-root/src/dictionary.txt
+        - name: OLLAMA_HOST
+          value: "0.0.0.0:11434"
+        - name: OLLAMA_MODELS
+          value: /home/ollama/.ollama/models
+        - name: OLLAMA_KEEP_ALIVE
+          value: "-1m"
       resources:
         requests:
           cpu: "100m"
@@ -36,13 +40,13 @@ spec:
           memory: 1Gi
       readinessProbe:
         httpGet:
-          path: /ready
-          port: 8080
-        initialDelaySeconds: 5
+          path: /
+          port: 11434
+        initialDelaySeconds: 20
         periodSeconds: 10
       livenessProbe:
         httpGet:
-          path: /health
-          port: 8080
-        initialDelaySeconds: 10
+          path: /
+          port: 11434
+        initialDelaySeconds: 30
         periodSeconds: 20

@@ -1,31 +1,113 @@
-FROM registry.access.redhat.com/ubi9/python-312:latest
+# vim: filetype=dockerfile
+# t9-kserve/Dockerfile — Ollama for IBM Z / LinuxONE (s390x), UBI 9 runtime
+#
+# Build:
+#   podman build --platform linux/s390x --format docker \
+#     -f t9-kserve/Dockerfile \
+#     -t quay.io/brice_patchou/ollama-s390x:kserve .
+#
+# Push:
+#   podman push quay.io/brice_patchou/ollama-s390x:kserve
 
-LABEL name="t9-kserve-runtime" \
-      summary="T9 Word Prediction FastAPI for KServe on s390x"
+ARG CMAKEVERSION=3.31.2
+ARG NINJAVERSION=1.12.1
 
-USER 0
+# ---------------------------------------------------------------------------
+# Stage 1 — base-s390x
+#   Toolchain layer: GCC + OpenBLAS + CMake + Ninja on UBI 9 s390x.
+#   UBI 9 (ubi9) ships gcc, make, cmake, and openblas-devel via the
+#   standard UBI + CodeReady Linux Builder repos.
+# ---------------------------------------------------------------------------
+FROM --platform=linux/s390x registry.redhat.io/ubi9/ubi:latest AS base-s390x
 
-WORKDIR /opt/app-root/src
+RUN dnf install -y --nodocs \
+        ca-certificates \
+        curl \
+        unzip \
+        git \
+        gcc \
+        gcc-c++ \
+        make \
+        cmake \
+        ninja-build \
+        pkgconfig \
+        openblas-devel \
+    && dnf clean all
 
-# Install dependencies into the image's virtualenv
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+ENV CMAKE_GENERATOR=Ninja
+ENV LDFLAGS=-s
 
-# Application code
-COPY app/ ./app/
-COPY dictionary.txt ./dictionary.txt
+# ---------------------------------------------------------------------------
+# Stage 2 — llama-server-cpu_s390x
+#   Builds llama-server using the cpu_s390x CMake preset.
+# ---------------------------------------------------------------------------
+FROM base-s390x AS llama-server-cpu_s390x
 
-# OpenShift random UID compatibility
-RUN chown -R 1001:0 /opt/app-root/src && \
-    chmod -R g=u /opt/app-root/src
+COPY LLAMA_CPP_VERSION .
+COPY llama/server llama/server
+COPY llama/compat llama/compat
 
-ENV PYTHONUNBUFFERED=1 \
-    DICTIONARY_PATH=/opt/app-root/src/dictionary.txt \
-    PORT=8080
+RUN cmake -S llama/server --preset cpu_s390x \
+        && cmake --build build/llama-server-cpu_s390x -- -l $(nproc) \
+        && cmake --install build/llama-server-cpu_s390x --component llama-server --strip
 
-USER 1001
+# ---------------------------------------------------------------------------
+# Stage 3 — Go build
+#   Compiles the ollama Go binary for linux/s390x with CGO enabled.
+# ---------------------------------------------------------------------------
+FROM base-s390x AS build
 
-EXPOSE 8080
+WORKDIR /go/src/github.com/ollama/ollama
 
-# Use the venv's python/uvicorn explicitly
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+COPY go.mod go.sum .
+
+RUN curl -fsSL \
+        https://golang.org/dl/go$(awk '/^go/ { print $2 }' go.mod).linux-s390x.tar.gz \
+    | tar xz -C /usr/local
+
+ENV PATH=/usr/local/go/bin:$PATH
+
+RUN go mod download
+
+COPY . .
+
+ENV CGO_ENABLED=1
+
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -buildmode=pie -o /bin/ollama .
+
+# ---------------------------------------------------------------------------
+# Stage 4 — UBI 9 minimal runtime (KServe / OpenShift AI compatible)
+#   Red Hat UBI 9 minimal satisfies OpenShift AI / KServe image policy.
+#   microdnf is the package manager in ubi-minimal.
+# ---------------------------------------------------------------------------
+FROM --platform=linux/s390x registry.redhat.io/ubi9/ubi-minimal:latest
+
+RUN microdnf install -y openblas --nodocs \
+    && microdnf clean all
+
+COPY --from=build                  /bin/ollama       /usr/bin/ollama
+COPY --from=llama-server-cpu_s390x dist/lib/ollama   /usr/lib/ollama
+
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV LD_LIBRARY_PATH=/usr/lib/ollama
+
+# Non-root user — uid 10001 keeps it outside the standard system uid range.
+RUN useradd -r -s /sbin/nologin -u 10001 -m -d /home/ollama ollama \
+    && mkdir -p /home/ollama/.ollama \
+    && chown -R ollama:ollama /home/ollama/.ollama
+
+# Default to localhost; KServe's ServingRuntime overrides OLLAMA_HOST to
+# 0.0.0.0 via env so the sidecar proxy can reach the server.
+ENV OLLAMA_HOST=127.0.0.1:11434
+ENV OLLAMA_MODELS=/home/ollama/.ollama/models
+
+EXPOSE 11434
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -sf http://127.0.0.1:11434/ || exit 1
+
+USER 10001
+
+ENTRYPOINT ["/usr/bin/ollama"]
+CMD ["serve"]
