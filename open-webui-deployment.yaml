@@ -88,9 +88,10 @@ spec:
               value: "true"
             - name: ANONYMIZED_TELEMETRY
               value: "false"
-            # Force start.sh to use Python 3.12 (UBI default python3 is 3.9)
-            - name: PYTHON_CMD
-              value: "/usr/bin/python3.12"
+            # Disable vector DB — chromadb requires onnxruntime (no s390x wheel)
+            # RAG/knowledge features unavailable; chat + Ollama inference work fine
+            - name: VECTOR_DB
+              value: "disabled"
           resources:
             requests:
               cpu: "200m"

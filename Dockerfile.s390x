@@ -46,6 +46,7 @@ COPY patch-tailwind-v3.cjs ./patch-tailwind-v3.cjs
 #   • postcss.config.js    — replaces @tailwindcss/postcss with tailwindcss+autoprefixer
 #   • tailwind.config.js   — injects gray-850 custom color
 RUN node patch-tailwind-v3.cjs
+COPY patch-vector-disabled.py ./patch-vector-disabled.py
 
 # Build the SvelteKit frontend
 RUN npx vite build
@@ -134,10 +135,15 @@ RUN pip3 install --no-cache-dir uv \
 # ---------------------------------------------------------------------------
 # Copy application files
 # ---------------------------------------------------------------------------
-COPY --from=frontend /app/build        /opt/app-root/src/build
-COPY --from=frontend /app/package.json /opt/app-root/src/package.json
+COPY --from=frontend /app/build                    /opt/app-root/src/build
+COPY --from=frontend /app/package.json             /opt/app-root/src/package.json
+COPY --from=frontend /app/patch-vector-disabled.py /opt/app-root/src/patch-vector-disabled.py
 
 COPY backend/ /opt/app-root/src/
+
+# Patch factory.py to add VECTOR_DB=disabled (no-op) support.
+# chromadb >=1.0 requires onnxruntime which has no s390x wheel.
+RUN /usr/bin/python3.12 /opt/app-root/src/patch-vector-disabled.py
 
 # env.py looks for CHANGELOG.md inside the open_webui package directory
 COPY --from=frontend /app/CHANGELOG.md /opt/app-root/src/open_webui/CHANGELOG.md
@@ -165,7 +171,8 @@ ENV PYTHONUNBUFFERED=1 \
     SCARF_NO_ANALYTICS=true \
     DO_NOT_TRACK=true \
     ANONYMIZED_TELEMETRY=false \
-    ENABLE_RAG_WEB_LOADER_SSL_VERIFICATION=false
+    ENABLE_RAG_WEB_LOADER_SSL_VERIFICATION=false \
+    VECTOR_DB=disabled
 
 EXPOSE 8080
 
