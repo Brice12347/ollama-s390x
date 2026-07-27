@@ -26,6 +26,8 @@ spec:
           name: http1
           protocol: TCP
       env:
+        - name: HOME
+          value: /home/ollama
         - name: OLLAMA_HOST
           value: "0.0.0.0:11434"
         - name: OLLAMA_MODELS
