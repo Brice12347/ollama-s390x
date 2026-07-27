@@ -46,7 +46,6 @@ COPY patch-tailwind-v3.cjs ./patch-tailwind-v3.cjs
 #   • postcss.config.js    — replaces @tailwindcss/postcss with tailwindcss+autoprefixer
 #   • tailwind.config.js   — injects gray-850 custom color
 RUN node patch-tailwind-v3.cjs
-COPY patch-vector-disabled.py ./patch-vector-disabled.py
 
 # Build the SvelteKit frontend
 RUN npx vite build
@@ -135,15 +134,115 @@ RUN pip3 install --no-cache-dir uv \
 # ---------------------------------------------------------------------------
 # Copy application files
 # ---------------------------------------------------------------------------
-COPY --from=frontend /app/build                    /opt/app-root/src/build
-COPY --from=frontend /app/package.json             /opt/app-root/src/package.json
-COPY --from=frontend /app/patch-vector-disabled.py /opt/app-root/src/patch-vector-disabled.py
+COPY --from=frontend /app/build     /opt/app-root/src/build
+COPY --from=frontend /app/package.json /opt/app-root/src/package.json
 
 COPY backend/ /opt/app-root/src/
 
-# Patch factory.py to add VECTOR_DB=disabled (no-op) support.
-# chromadb >=1.0 requires onnxruntime which has no s390x wheel.
-RUN /usr/bin/python3.12 /opt/app-root/src/patch-vector-disabled.py
+# Patch factory.py inline — adds NullVectorDB + "disabled" case so the app
+# starts without chromadb/onnxruntime (no s390x wheel available).
+# Written directly so the build works whether the source was cloned from
+# upstream open-webui/open-webui or our fork.
+RUN cat > /opt/app-root/src/open_webui/retrieval/vector/factory.py << 'FACTORY_EOF'
+from open_webui.config import (
+    ENABLE_MILVUS_MULTITENANCY_MODE,
+    ENABLE_QDRANT_MULTITENANCY_MODE,
+    VECTOR_DB,
+)
+from open_webui.retrieval.vector.main import VectorDBBase
+from open_webui.retrieval.vector.type import VectorType
+
+
+class NullVectorDB(VectorDBBase):
+    """No-op vector DB used when VECTOR_DB=disabled (s390x — no onnxruntime wheel)."""
+
+    def has_collection(self, collection_name: str) -> bool:
+        return False
+
+    def delete_collection(self, collection_name: str) -> None:
+        pass
+
+    def search(self, collection_name, vectors, limit):
+        return None
+
+    def query(self, collection_name, where=None, limit=None):
+        return None
+
+    def get(self, collection_name):
+        return None
+
+    def insert(self, collection_name, items) -> None:
+        pass
+
+    def upsert(self, collection_name, items) -> None:
+        pass
+
+    def delete(self, collection_name, ids=None, filter=None) -> None:
+        pass
+
+    def reset(self) -> None:
+        pass
+
+
+class Vector:
+    @staticmethod
+    def get_vector(vector_type: str) -> VectorDBBase:
+        match vector_type:
+            case "disabled":
+                return NullVectorDB()
+            case VectorType.MILVUS:
+                if ENABLE_MILVUS_MULTITENANCY_MODE:
+                    from open_webui.retrieval.vector.dbs.milvus_multitenancy import MilvusClient
+                    return MilvusClient()
+                else:
+                    from open_webui.retrieval.vector.dbs.milvus import MilvusClient
+                    return MilvusClient()
+            case VectorType.QDRANT:
+                if ENABLE_QDRANT_MULTITENANCY_MODE:
+                    from open_webui.retrieval.vector.dbs.qdrant_multitenancy import QdrantClient
+                    return QdrantClient()
+                else:
+                    from open_webui.retrieval.vector.dbs.qdrant import QdrantClient
+                    return QdrantClient()
+            case VectorType.PINECONE:
+                from open_webui.retrieval.vector.dbs.pinecone import PineconeClient
+                return PineconeClient()
+            case VectorType.S3VECTOR:
+                from open_webui.retrieval.vector.dbs.s3vector import S3VectorClient
+                return S3VectorClient()
+            case VectorType.OPENSEARCH:
+                from open_webui.retrieval.vector.dbs.opensearch import OpenSearchClient
+                return OpenSearchClient()
+            case VectorType.PGVECTOR:
+                from open_webui.retrieval.vector.dbs.pgvector import PgvectorClient
+                return PgvectorClient()
+            case VectorType.OPENGAUSS:
+                from open_webui.retrieval.vector.dbs.opengauss import OpenGaussClient
+                return OpenGaussClient()
+            case VectorType.MARIADB_VECTOR:
+                from open_webui.retrieval.vector.dbs.mariadb_vector import MariaDBVectorClient
+                return MariaDBVectorClient()
+            case VectorType.ELASTICSEARCH:
+                from open_webui.retrieval.vector.dbs.elasticsearch import ElasticsearchClient
+                return ElasticsearchClient()
+            case VectorType.CHROMA:
+                from open_webui.retrieval.vector.dbs.chroma import ChromaClient
+                return ChromaClient()
+            case VectorType.ORACLE23AI:
+                from open_webui.retrieval.vector.dbs.oracle23ai import Oracle23aiClient
+                return Oracle23aiClient()
+            case VectorType.WEAVIATE:
+                from open_webui.retrieval.vector.dbs.weaviate import WeaviateClient
+                return WeaviateClient()
+            case VectorType.VALKEY:
+                from open_webui.retrieval.vector.dbs.valkey import ValkeyClient
+                return ValkeyClient()
+            case _:
+                raise ValueError(f'Unsupported vector type: {vector_type}')
+
+
+VECTOR_DB_CLIENT = Vector.get_vector(VECTOR_DB)
+FACTORY_EOF
 
 # env.py looks for CHANGELOG.md inside the open_webui package directory
 COPY --from=frontend /app/CHANGELOG.md /opt/app-root/src/open_webui/CHANGELOG.md
