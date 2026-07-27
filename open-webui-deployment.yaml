@@ -65,7 +65,7 @@ spec:
             # Format: http://<inferenceservice-name>-predictor.<namespace>.svc.cluster.local:11434
             # ----------------------------------------------------------------
             - name: OLLAMA_BASE_URL
-              value: "http://ollama-predictor.project-ollama.svc.cluster.local:11434"
+              value: "http://ollama-predictor-predictor.project-ollama.svc.cluster.local:11434"
             # Generate a real secret: python3 -c "import secrets; print(secrets.token_hex(32))"
             - name: WEBUI_SECRET_KEY
               value: "change-me-to-a-real-secret"

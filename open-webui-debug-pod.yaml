@@ -37,7 +37,7 @@ spec:
         - name: WEBUI_SECRET_KEY
           value: "debug-only-not-for-production"
         - name: OLLAMA_BASE_URL
-          value: "http://ollama-predictor.project-ollama.svc.cluster.local:11434"
+          value: "http://ollama-predictor-predictor.project-ollama.svc.cluster.local:11434"
       resources:
         requests:
           cpu: "200m"
