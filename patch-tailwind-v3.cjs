@@ -118,6 +118,12 @@ if (!twCfg.includes('gray-850') && !twCfg.includes("'850'")) {
   const insert = [
     'theme: {',
     '    extend: {',
+    '      zIndex: {',
+    "        '9999': '9999',",
+    '      },',
+    '      borderRadius: {',
+    "        '4xl': '2rem',",
+    '      },',
     '      colors: {',
     '        gray: {',
     "          '850': ({ opacityValue }) =>",
