@@ -19,7 +19,7 @@ metadata:
 spec:
   containers:
     - name: debug
-      image: quay.io/justinveltri/open-webui:s390x-v20
+      image: quay.io/justinveltri/open-webui:s390x-v22
       imagePullPolicy: Always
       command: ["/bin/bash", "-c", "sleep infinity"]
       workingDir: /opt/app-root/src
