@@ -129,12 +129,13 @@ RUN pip3 install --no-cache-dir uv \
         python-pptx \
         fpdf2 \
         ftfy \
-        ldap3
+        ldap3 \
+        greenlet
 
 # ---------------------------------------------------------------------------
 # Copy application files
 # ---------------------------------------------------------------------------
-COPY --from=frontend /app/build     /opt/app-root/src/build
+COPY --from=frontend /app/build        /opt/app-root/build
 COPY --from=frontend /app/package.json /opt/app-root/src/package.json
 
 COPY backend/ /opt/app-root/src/
@@ -252,8 +253,8 @@ COPY --from=frontend /app/CHANGELOG.md /opt/app-root/src/open_webui/CHANGELOG.md
 #   chown 1001:0 + chmod g=u — same pattern as t9-kserve/Dockerfile
 # ---------------------------------------------------------------------------
 RUN mkdir -p /opt/app-root/src/data \
-    && chown -R 1001:0 /opt/app-root/src \
-    && chmod -R g=u    /opt/app-root/src
+    && chown -R 1001:0 /opt/app-root \
+    && chmod -R g=u    /opt/app-root
 
 USER 1001
 
