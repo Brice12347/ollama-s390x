@@ -66,6 +66,13 @@ spec:
             # ----------------------------------------------------------------
             - name: OLLAMA_BASE_URL
               value: "http://ollama-predictor-predictor.project-ollama.svc.cluster.local:11434"
+            # CPU inference on s390x is slow — extend timeouts to 10 minutes
+            - name: AIOHTTP_CLIENT_TIMEOUT
+              value: "600"
+            - name: AIOHTTP_CLIENT_TIMEOUT_OPENAI_MODEL_LIST
+              value: "30"
+            - name: OLLAMA_REQUEST_TIMEOUT
+              value: "600"
             # Generate a real secret: python3 -c "import secrets; print(secrets.token_hex(32))"
             - name: WEBUI_SECRET_KEY
               value: "change-me-to-a-real-secret"
