@@ -4,10 +4,10 @@
 # Build:
 #   podman build --platform linux/s390x --format docker \
 #     -f Dockerfile.kserve \
-#     -t quay.io/brice_patchou/ollama-s390x:kserve .
+#     -t quay.io/justinveltri/ollama-s390x:kserve .
 #
 # Push:
-#   podman push quay.io/brice_patchou/ollama-s390x:kserve
+#   podman push quay.io/justinveltri/ollama-s390x:kserve
 
 ARG CMAKEVERSION=3.31.2
 ARG NINJAVERSION=1.12.1
@@ -95,12 +95,18 @@ ENV LD_LIBRARY_PATH=/usr/lib/ollama
 # Non-root user — uid 10001 keeps it outside the standard system uid range.
 RUN useradd -r -s /sbin/nologin -u 10001 -m -d /home/ollama ollama \
     && mkdir -p /home/ollama/.ollama \
-    && chown -R ollama:ollama /home/ollama/.ollama
+    && chown -R ollama:0 /home/ollama \
+    && chmod -R g=u /home/ollama
 
 # Default to localhost; KServe's ServingRuntime overrides OLLAMA_HOST to
 # 0.0.0.0 via env so the sidecar proxy can reach the server.
 ENV OLLAMA_HOST=127.0.0.1:11434
+# Models directory — overridden at runtime by OLLAMA_MODELS env in the
+# Deployment (points at the ollama-model-storage PVC at /ollama-storage).
 ENV OLLAMA_MODELS=/home/ollama/.ollama/models
+# s390x: GGUF tensors must be byte-swapped LE→BE on every cold load.
+# Extend the load timeout well past the default 5m so bswap completes.
+ENV OLLAMA_LOAD_TIMEOUT=30m
 
 EXPOSE 11434
 

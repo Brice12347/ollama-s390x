@@ -1,0 +1,77 @@
+---
+# PVC for Ollama model storage — survives pod restarts.
+# Models pulled with `ollama pull` are written here and persist across rollouts.
+#
+# Size guide:
+#   smollm:135m   —  91 MB
+#   granite3.3:2b —   1.5 GB
+#   30Gi covers ~10 medium models comfortably.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models-pvc
+  namespace: project-ollama
+  labels:
+    app: ollama-predictor
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 30Gi
+
+---
+# Ollama InferenceService — s390x CPU inference on OpenShift AI / KServe
+#
+# Apply with:
+#   oc apply -f ollama-inferenceservice.yaml -n project-ollama
+#
+# After first deploy, pull models with:
+#   oc exec -n project-ollama deployment/ollama-predictor-predictor \
+#     -c kserve-container -- ollama pull smollm:135m
+#   oc exec -n project-ollama deployment/ollama-predictor-predictor \
+#     -c kserve-container -- ollama pull granite3.3:2b
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: ollama-predictor
+  namespace: project-ollama
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+  labels:
+    opendatahub.io/dashboard: "true"
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 1
+    # Run as the ollama uid baked into Dockerfile.kserve (useradd -u 10001).
+    # OpenShift's arbitrary-uid SCC would assign a random UID that has no
+    # write access to /home/ollama/.ollama (chowned to 10001 in the image).
+    podSpec:
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+    model:
+      modelFormat:
+        name: any
+      runtime: ollama
+      # No storageUri — KServe mounts storageUri read-only which prevents
+      # Ollama from writing its key/config files under /mnt/models/.ollama.
+      # Models are stored on the ollama-model-storage PVC mounted via the
+      # Deployment directly (oc set env OLLAMA_MODELS=/ollama-storage).
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "2Gi"
+        limits:
+          cpu: "4"
+          memory: "4Gi"
+# NOTE: To set extra env vars on the Ollama container use oc set env directly
+# on the Deployment — the KServe webhook forbids mixing spec.predictor.containers
+# with spec.predictor.model in the same InferenceService spec.
+#
+# Required for s390x (set after each pod restart or bake into the image ENV):
+#   oc set env deployment/ollama-predictor-predictor -c kserve-container \
+#     OLLAMA_LOAD_TIMEOUT=30m OLLAMA_KEEP_ALIVE=-1 OLLAMA_MODELS=/mnt/models \
+#     -n project-ollama

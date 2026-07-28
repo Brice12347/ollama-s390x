@@ -9,7 +9,28 @@
 #   - Set OLLAMA_BASE_URL below to the Ollama service URL
 #     (internal: http://<inferenceservice-name>-predictor.<namespace>.svc.cluster.local:11434)
 #     (external route: https://<route-host>)
+#
+# First-time PVC creation:
+#   The PersistentVolumeClaim below is included in this file.
+#   If it already exists from a previous apply, oc apply is idempotent.
 
+---
+# PersistentVolumeClaim — survives pod restarts; stores SQLite DB + uploads
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: webui-data
+  namespace: project-ollama
+  labels:
+    app: open-webui
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -27,21 +48,6 @@ spec:
       labels:
         app: open-webui
     spec:
-      # Wipe the data directory before the app starts so a stale / partially-
-      # migrated SQLite DB from a previous pod never blocks Alembic migrations.
-      # Safe with emptyDir because the volume is ephemeral per-pod anyway.
-      # Remove this initContainer once you switch to a persistent PVC.
-      initContainers:
-        - name: wipe-stale-db
-          image: quay.io/justinveltri/open-webui:s390x-v25
-          imagePullPolicy: Always
-          command: ["/bin/bash", "-c", "rm -f /opt/app-root/src/data/webui.db /opt/app-root/src/data/webui.db-shm /opt/app-root/src/data/webui.db-wal"]
-          securityContext:
-            runAsNonRoot: true
-            allowPrivilegeEscalation: false
-          volumeMounts:
-            - name: webui-data
-              mountPath: /opt/app-root/src/data
       containers:
         - name: open-webui
           image: quay.io/justinveltri/open-webui:s390x-v25
@@ -66,13 +72,19 @@ spec:
             # ----------------------------------------------------------------
             - name: OLLAMA_BASE_URL
               value: "http://ollama-predictor-predictor.project-ollama.svc.cluster.local:11434"
-            # CPU inference on s390x is slow — extend timeouts to 10 minutes
+            # CPU inference on s390x is slow — extend all timeouts to 30 minutes
             - name: AIOHTTP_CLIENT_TIMEOUT
-              value: "600"
+              value: "1800"
             - name: AIOHTTP_CLIENT_TIMEOUT_OPENAI_MODEL_LIST
               value: "30"
             - name: OLLAMA_REQUEST_TIMEOUT
-              value: "600"
+              value: "1800"
+            - name: REQUEST_TIMEOUT
+              value: "1800"
+            - name: CONTENT_EXTRACTION_ENGINE_TIMEOUT
+              value: "1800"
+            - name: UVICORN_TIMEOUT_KEEP_ALIVE
+              value: "1800"
             # Generate a real secret: python3 -c "import secrets; print(secrets.token_hex(32))"
             - name: WEBUI_SECRET_KEY
               value: "change-me-to-a-real-secret"
@@ -84,6 +96,12 @@ spec:
               value: "0.0.0.0"
             - name: DOCKER
               value: "true"
+            - name: ENABLE_SIGNUP
+              value: "true"
+            - name: ENABLE_LOGIN_FORM
+              value: "true"
+            - name: DEFAULT_USER_ROLE
+              value: "admin"
             # Disable RAG/vector store (chromadb removed for s390x compatibility)
             - name: ENABLE_RAG_WEB_SEARCH
               value: "false"
@@ -97,6 +115,13 @@ spec:
             # RAG/knowledge features unavailable; chat + Ollama inference work fine
             - name: VECTOR_DB
               value: "disabled"
+            # Disable auto title generation — it fires a second concurrent Ollama
+            # request which times out while the main chat request is still loading
+            # the model (bswap takes ~5 min on s390x CPU cold start).
+            - name: ENABLE_TITLE_GENERATION
+              value: "false"
+            - name: ENABLE_AUTOCOMPLETE_GENERATION
+              value: "false"
           resources:
             requests:
               cpu: "200m"
@@ -123,8 +148,8 @@ spec:
               mountPath: /opt/app-root/src/data
       volumes:
         - name: webui-data
-          # Use emptyDir for initial testing; replace with PVC for persistence
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: webui-data
       # OpenShift will assign an arbitrary UID — image is chown 1001:0 + g=u
       securityContext:
         runAsNonRoot: true
@@ -155,6 +180,11 @@ metadata:
   namespace: project-ollama
   labels:
     app: open-webui
+  annotations:
+    # HAProxy router timeout — must be longer than the slowest LLM inference
+    # request (smollm:135m ~2 min, larger models up to 10+ min on CPU).
+    # Default OpenShift route timeout is 30s which kills streaming responses.
+    haproxy.router.openshift.io/timeout: 30m
 spec:
   to:
     kind: Service
