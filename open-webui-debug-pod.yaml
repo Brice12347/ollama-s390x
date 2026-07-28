@@ -1,0 +1,59 @@
+---
+# Stable debug pod for Open WebUI s390x dependency discovery.
+# This pod runs forever (sleep infinity) so you can oc rsh into it
+# and iteratively test pip installs without any app crashes.
+#
+# Usage:
+#   oc apply -f open-webui-debug-pod.yaml -n project-ollama
+#   oc rsh -n project-ollama open-webui-debug bash -l
+#
+# Cleanup:
+#   oc delete -f open-webui-debug-pod.yaml -n project-ollama
+apiVersion: v1
+kind: Pod
+metadata:
+  name: open-webui-debug
+  namespace: project-ollama
+  labels:
+    app: open-webui-debug
+spec:
+  containers:
+    - name: debug
+      image: quay.io/justinveltri/open-webui:s390x-v25
+      imagePullPolicy: Always
+      command: ["/bin/bash", "-c", "sleep infinity"]
+      workingDir: /opt/app-root/src
+      env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: PORT
+          value: "8080"
+        - name: HOST
+          value: "0.0.0.0"
+        - name: ENV
+          value: "prod"
+        - name: DOCKER
+          value: "true"
+        - name: WEBUI_SECRET_KEY
+          value: "debug-only-not-for-production"
+        - name: OLLAMA_BASE_URL
+          value: "http://ollama-predictor-predictor.project-ollama.svc.cluster.local:11434"
+      resources:
+        requests:
+          cpu: "200m"
+          memory: "512Mi"
+        limits:
+          cpu: "2"
+          memory: "2Gi"
+      securityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+      volumeMounts:
+        - name: data
+          mountPath: /opt/app-root/src/data
+  volumes:
+    - name: data
+      emptyDir: {}
+  securityContext:
+    runAsNonRoot: true
+  restartPolicy: Never

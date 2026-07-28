@@ -1,0 +1,282 @@
+# vim: filetype=dockerfile
+# Dockerfile.s390x — Open WebUI for IBM Z / LinuxONE (s390x), UBI 9 runtime
+#
+# Build (from inside ollama-dev Podman container on Triframe):
+#   podman build --platform linux/s390x --format docker \
+#     -f Dockerfile.s390x \
+#     -t quay.io/brice_patchou/open-webui:s390x .
+#
+# Push:
+#   podman push quay.io/brice_patchou/open-webui:s390x
+
+# ---------------------------------------------------------------------------
+# Stage 1 — frontend
+#   Builds the SvelteKit static bundle using the build host's native arch.
+#   Output is pure HTML/JS so the build platform does not matter.
+#
+#   Key s390x problem: Tailwind v4 (which upstream ships) depends on
+#   lightningcss which has no pre-built s390x binary and no pure-JS fallback.
+#   Fix: downgrade tailwindcss to v3 and patch all v4-specific config/CSS.
+# ---------------------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi9/nodejs-22 AS frontend
+
+USER 0
+
+WORKDIR /app
+
+RUN dnf install -y git && dnf clean all
+
+COPY package.json package-lock.json ./
+# Install deps including the v4 tailwind (will be replaced below)
+RUN npm ci --force
+
+# Downgrade Tailwind v4 → v3 (lightningcss native binary issue on s390x)
+# Also ensure postcss-import and autoprefixer are available for v3.
+RUN npm install --save-dev \
+        tailwindcss@">=3.4 <4" \
+        autoprefixer \
+        postcss-import
+
+# Copy source and the build-time patch script
+COPY . .
+COPY patch-tailwind-v3.cjs ./patch-tailwind-v3.cjs
+
+# Apply all Tailwind v3 compatibility patches in one step:
+#   • src/tailwind.css     — replaces v4 @import/@theme/@config/@custom-variant
+#   • postcss.config.js    — replaces @tailwindcss/postcss with tailwindcss+autoprefixer
+#   • tailwind.config.js   — injects gray-850 custom color
+RUN node patch-tailwind-v3.cjs
+
+# Build the SvelteKit frontend
+RUN npx vite build
+
+# ---------------------------------------------------------------------------
+# Stage 2 — Python backend (s390x)
+#   UBI 9 Python 3.12 — same base used in t9-kserve, confirmed s390x-capable.
+#   gcc + gcc-c++ + rust + cargo allow source-compiling any wheels that lack
+#   a pre-built s390x binary (tiktoken, brotlicffi, chromadb, etc.).
+# ---------------------------------------------------------------------------
+FROM --platform=linux/s390x registry.access.redhat.com/ubi9/python-312:latest
+
+USER 0
+
+# UBI 9 ships SQLite 3.34 which is too old for Alembic's DROP COLUMN migration
+# (requires 3.35+). All pre-built RPMs for newer SQLite require GLIBC 2.38 but
+# UBI 9 only has GLIBC 2.34, so we compile SQLite 3.43.2 from source instead.
+# --allowerasing replaces curl-minimal (UBI 9 default) with full curl.
+RUN dnf install -y --nodocs --allowerasing \
+        gcc \
+        gcc-c++ \
+        rust \
+        cargo \
+        git \
+        curl \
+        jq \
+        make \
+        tcl \
+        libpq-devel \
+    && dnf clean all \
+    && curl -fsSL https://www.sqlite.org/2023/sqlite-autoconf-3430200.tar.gz \
+       | tar -xz \
+    && cd sqlite-autoconf-3430200 \
+    && ./configure --prefix=/usr --libdir=/usr/lib64 \
+    && make -j$(nproc) \
+    && make install \
+    && cd .. && rm -rf sqlite-autoconf-3430200 \
+    && ldconfig
+
+WORKDIR /opt/app-root/src
+
+# ---------------------------------------------------------------------------
+# Install Python dependencies
+# requirements-min.txt is Open WebUI's slim list — chat/auth/API surface,
+# no playwright, colbert-ai, torch, or RAG-heavy packages.
+# ---------------------------------------------------------------------------
+COPY backend/requirements-min.txt ./requirements.txt
+
+# Packages that are imported unconditionally at module load time but are
+# absent from requirements-min.txt. The app crashes on startup without them.
+#
+# storage/provider.py (top-level, no guard):
+#   boto3, azure-storage-blob, azure-identity, google-cloud-storage
+#
+# routers/retrieval.py (top-level import):
+#   tiktoken  — no s390x wheel; compiles from source via Rust (cargo is present)
+#
+# retrieval/utils.py (top-level import):
+#   huggingface_hub
+#
+# retrieval/web/duckduckgo.py → imported unconditionally by retrieval.py:
+#   ddgs
+# psycopg[binary] has no s390x wheel — replace with source-compiled psycopg
+RUN sed -i 's/psycopg\[binary\]/psycopg/' requirements.txt
+RUN pip3 install --no-cache-dir uv \
+    && uv pip install --system --no-cache-dir --python python3.12 -r requirements.txt \
+    && uv pip install --system --no-cache-dir --python python3.12 \
+        boto3 \
+        azure-storage-blob \
+        azure-identity \
+        google-cloud-storage \
+        huggingface_hub \
+        ddgs \
+        tiktoken \
+        validators \
+        markdown \
+        python-mimeparse \
+        joserfc \
+        Pillow \
+        pytz \
+        python-pptx \
+        fpdf2 \
+        ftfy \
+        ldap3 \
+        greenlet
+
+# ---------------------------------------------------------------------------
+# Copy application files
+# ---------------------------------------------------------------------------
+COPY --from=frontend /app/build        /opt/app-root/build
+COPY --from=frontend /app/package.json /opt/app-root/src/package.json
+
+COPY backend/ /opt/app-root/src/
+
+# Patch factory.py inline — adds NullVectorDB + "disabled" case so the app
+# starts without chromadb/onnxruntime (no s390x wheel available).
+# Written directly so the build works whether the source was cloned from
+# upstream open-webui/open-webui or our fork.
+RUN cat > /opt/app-root/src/open_webui/retrieval/vector/factory.py << 'FACTORY_EOF'
+from open_webui.config import (
+    ENABLE_MILVUS_MULTITENANCY_MODE,
+    ENABLE_QDRANT_MULTITENANCY_MODE,
+    VECTOR_DB,
+)
+from open_webui.retrieval.vector.main import VectorDBBase
+from open_webui.retrieval.vector.type import VectorType
+
+
+class NullVectorDB(VectorDBBase):
+    """No-op vector DB used when VECTOR_DB=disabled (s390x — no onnxruntime wheel)."""
+
+    def has_collection(self, collection_name: str) -> bool:
+        return False
+
+    def delete_collection(self, collection_name: str) -> None:
+        pass
+
+    def search(self, collection_name, vectors, limit):
+        return None
+
+    def query(self, collection_name, where=None, limit=None):
+        return None
+
+    def get(self, collection_name):
+        return None
+
+    def insert(self, collection_name, items) -> None:
+        pass
+
+    def upsert(self, collection_name, items) -> None:
+        pass
+
+    def delete(self, collection_name, ids=None, filter=None) -> None:
+        pass
+
+    def reset(self) -> None:
+        pass
+
+
+class Vector:
+    @staticmethod
+    def get_vector(vector_type: str) -> VectorDBBase:
+        match vector_type:
+            case "disabled":
+                return NullVectorDB()
+            case VectorType.MILVUS:
+                if ENABLE_MILVUS_MULTITENANCY_MODE:
+                    from open_webui.retrieval.vector.dbs.milvus_multitenancy import MilvusClient
+                    return MilvusClient()
+                else:
+                    from open_webui.retrieval.vector.dbs.milvus import MilvusClient
+                    return MilvusClient()
+            case VectorType.QDRANT:
+                if ENABLE_QDRANT_MULTITENANCY_MODE:
+                    from open_webui.retrieval.vector.dbs.qdrant_multitenancy import QdrantClient
+                    return QdrantClient()
+                else:
+                    from open_webui.retrieval.vector.dbs.qdrant import QdrantClient
+                    return QdrantClient()
+            case VectorType.PINECONE:
+                from open_webui.retrieval.vector.dbs.pinecone import PineconeClient
+                return PineconeClient()
+            case VectorType.S3VECTOR:
+                from open_webui.retrieval.vector.dbs.s3vector import S3VectorClient
+                return S3VectorClient()
+            case VectorType.OPENSEARCH:
+                from open_webui.retrieval.vector.dbs.opensearch import OpenSearchClient
+                return OpenSearchClient()
+            case VectorType.PGVECTOR:
+                from open_webui.retrieval.vector.dbs.pgvector import PgvectorClient
+                return PgvectorClient()
+            case VectorType.OPENGAUSS:
+                from open_webui.retrieval.vector.dbs.opengauss import OpenGaussClient
+                return OpenGaussClient()
+            case VectorType.MARIADB_VECTOR:
+                from open_webui.retrieval.vector.dbs.mariadb_vector import MariaDBVectorClient
+                return MariaDBVectorClient()
+            case VectorType.ELASTICSEARCH:
+                from open_webui.retrieval.vector.dbs.elasticsearch import ElasticsearchClient
+                return ElasticsearchClient()
+            case VectorType.CHROMA:
+                from open_webui.retrieval.vector.dbs.chroma import ChromaClient
+                return ChromaClient()
+            case VectorType.ORACLE23AI:
+                from open_webui.retrieval.vector.dbs.oracle23ai import Oracle23aiClient
+                return Oracle23aiClient()
+            case VectorType.WEAVIATE:
+                from open_webui.retrieval.vector.dbs.weaviate import WeaviateClient
+                return WeaviateClient()
+            case VectorType.VALKEY:
+                from open_webui.retrieval.vector.dbs.valkey import ValkeyClient
+                return ValkeyClient()
+            case _:
+                raise ValueError(f'Unsupported vector type: {vector_type}')
+
+
+VECTOR_DB_CLIENT = Vector.get_vector(VECTOR_DB)
+FACTORY_EOF
+
+# env.py looks for CHANGELOG.md inside the open_webui package directory
+COPY --from=frontend /app/CHANGELOG.md /opt/app-root/src/open_webui/CHANGELOG.md
+
+# ---------------------------------------------------------------------------
+# OpenShift SCC compliance
+#   chown 1001:0 + chmod g=u — same pattern as t9-kserve/Dockerfile
+# ---------------------------------------------------------------------------
+RUN mkdir -p /opt/app-root/src/data \
+    && chown -R 1001:0 /opt/app-root \
+    && chmod -R g=u    /opt/app-root
+
+USER 1001
+
+# ---------------------------------------------------------------------------
+# Runtime
+# ---------------------------------------------------------------------------
+ENV PYTHONUNBUFFERED=1 \
+    PORT=8080 \
+    HOST=0.0.0.0 \
+    ENV=prod \
+    DOCKER=true \
+    OLLAMA_BASE_URL="http://ollama:11434" \
+    WEBUI_SECRET_KEY="" \
+    SCARF_NO_ANALYTICS=true \
+    DO_NOT_TRACK=true \
+    ANONYMIZED_TELEMETRY=false \
+    ENABLE_RAG_WEB_LOADER_SSL_VERIFICATION=false \
+    VECTOR_DB=disabled
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -sf http://localhost:8080/health | jq -ne 'input.status == true' || exit 1
+
+CMD ["bash", "start.sh"]

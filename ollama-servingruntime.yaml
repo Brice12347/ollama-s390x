@@ -1,7 +1,8 @@
 apiVersion: serving.kserve.io/v1alpha1
-kind: ClusterServingRuntime
+kind: ServingRuntime
 metadata:
-  name: ollama-s390x
+  name: ollama
+  namespace: project-ollama
   labels:
     opendatahub.io/dashboard: "true"
   annotations:
@@ -12,16 +13,41 @@ metadata:
 spec:
   builtInAdapter:
     modelLoadingTimeoutMillis: 90000
+  initContainers:
+    - name: fix-home-perms
+      image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+      command: ["sh", "-c", "chmod -R g=u /home/ollama && chown -R :0 /home/ollama"]
+      securityContext:
+        runAsUser: 0
+      volumeMounts: []
   containers:
     - name: kserve-container
-      image: quay.io/brice_patchou/ollama-s390x:kserve
+      image: quay.io/justinveltri/ollama-s390x:kserve
       env:
+        # HOME must be set explicitly — OpenShift runs containers as an arbitrary
+        # UID whose $HOME defaults to / (read-only). Ollama derives its data dir
+        # from os/user.Current().HomeDir, ignoring OLLAMA_HOME entirely.
+        - name: HOME
+          value: "/home/ollama"
         - name: OLLAMA_MODELS
-          value: "/.ollama/models"
+          value: "/home/ollama/.ollama/models"
         - name: OLLAMA_HOST
-          value: "0.0.0.0"
+          value: "0.0.0.0:11434"
         - name: OLLAMA_KEEP_ALIVE
-          value: "-1m"
+          value: "-1"
+        # s390x: GGUF tensors must be byte-swapped LE→BE on every cold load.
+        # smollm:135m bswap takes ~5-6 min on CPU — extend well past default 5m.
+        - name: OLLAMA_LOAD_TIMEOUT
+          value: "30m"
+        # Thread tuning — all cores to one request, no parallel model slots.
+        - name: OLLAMA_NUM_PARALLEL
+          value: "1"
+        - name: OLLAMA_MAX_LOADED_MODELS
+          value: "1"
+        - name: OPENBLAS_NUM_THREADS
+          value: "8"
+        - name: OMP_NUM_THREADS
+          value: "8"
       ports:
         - containerPort: 11434
           name: http1
