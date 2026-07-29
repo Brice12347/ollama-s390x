@@ -1,11 +1,30 @@
 # servingruntime.yaml
+#
+# Three ServingRuntime variants for Ollama on IBM Z / LinuxONE (s390x):
+#
+#   ollama-fastapi-runtime          — CPU-only / scalar fallback (any z-series)
+#   ollama-fastapi-runtime-vxe      — SIMD/VXE acceleration (IBM z15 / LinuxONE 3+)
+#   ollama-fastapi-runtime-zdnn     — zDNN/zAIU co-processor (IBM z17 / LinuxONE 5+)
+#
+# Deploy the variant that matches your hardware generation.
+# The VXE and zDNN images fall back gracefully to scalar/CPU on older hosts,
+# so deploying a newer image on older hardware is safe but provides no speedup.
+#
+# Apply with:
+#   oc apply -f t9-kserve/servingruntime.yaml
+
+---
+# ---------------------------------------------------------------------------
+# CPU-only runtime  (IBM z14 and later — scalar implementation)
+# Image: quay.io/brice_patchou/ollama-s390x:kserve
+# ---------------------------------------------------------------------------
 apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
   name: ollama-fastapi-runtime
   annotations:
-    openshift.io/display-name: "Ollama ServingRuntime (s390x)"
-    opendatahub.io/recommended-accelerators: '[]'   # CPU only
+    openshift.io/display-name: "Ollama ServingRuntime (s390x — CPU)"
+    opendatahub.io/recommended-accelerators: '[]'   # CPU only — no hardware accelerator
   labels:
     opendatahub.io/dashboard: "true"
 spec:
@@ -34,6 +53,139 @@ spec:
           value: "/mnt/models"
         - name: OLLAMA_KEEP_ALIVE
           value: "-1"
+      resources:
+        requests:
+          cpu: "100m"
+          memory: 256Mi
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 11434
+        initialDelaySeconds: 20
+        periodSeconds: 10
+      livenessProbe:
+        httpGet:
+          path: /
+          port: 11434
+        initialDelaySeconds: 30
+        periodSeconds: 20
+
+---
+# ---------------------------------------------------------------------------
+# SIMD/VXE-accelerated runtime  (IBM z15 / LinuxONE 3 and later)
+# Compile flag: -DGGML_VXE=ON  (GGML_VXE is the z/Architecture SIMD backend)
+# Falls back silently to scalar on z14 and older.
+# Image: quay.io/brice_patchou/ollama-s390x:kserve-vxe
+# ---------------------------------------------------------------------------
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: ollama-fastapi-runtime-vxe
+  annotations:
+    openshift.io/display-name: "Ollama ServingRuntime (s390x — SIMD/VXE, z15+)"
+    # No dedicated KServe accelerator profile for SIMD; hardware is used
+    # automatically by GGML when the pod lands on a z15 or newer node.
+    opendatahub.io/recommended-accelerators: '[]'
+  labels:
+    opendatahub.io/dashboard: "true"
+spec:
+  multiModel: false
+  supportedModelFormats:
+    - name: any
+      version: "1"
+      autoSelect: true
+  protocolVersions:
+    - v2
+    - v1
+  containers:
+    - name: kserve-container
+      image: quay.io/brice_patchou/ollama-s390x:kserve-vxe
+      imagePullPolicy: Always
+      ports:
+        - containerPort: 11434
+          name: http1
+          protocol: TCP
+      env:
+        - name: OLLAMA_HOST
+          value: "0.0.0.0:11434"
+        - name: OLLAMA_MODELS
+          value: "/mnt/models"
+        - name: HOME
+          value: "/mnt/models"
+        - name: OLLAMA_KEEP_ALIVE
+          value: "-1"
+        # Tell Ollama which runner sub-directory holds the VXE-accelerated
+        # llama-server binary.  Ollama will fall back to the base payload if
+        # the directory is absent or the host CPU does not support VXE.
+        - name: OLLAMA_RUNNERS_DIR
+          value: "/usr/lib/ollama/s390x_vxe"
+      resources:
+        requests:
+          cpu: "100m"
+          memory: 256Mi
+      readinessProbe:
+        httpGet:
+          path: /
+          port: 11434
+        initialDelaySeconds: 20
+        periodSeconds: 10
+      livenessProbe:
+        httpGet:
+          path: /
+          port: 11434
+        initialDelaySeconds: 30
+        periodSeconds: 20
+
+---
+# ---------------------------------------------------------------------------
+# zDNN/zAIU co-processor runtime  (IBM z17 / LinuxONE 5 and later)
+# Compile flags: -DGGML_VXE=ON -DGGML_ZDNN=ON  (IBM Integrated Accelerator for AI)
+# Falls back silently to CPU routines on z16 and older.
+# Image: quay.io/brice_patchou/ollama-s390x:kserve-zdnn
+# NOTE: the libzdnn runtime library must be present on the worker node.
+# ---------------------------------------------------------------------------
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: ollama-fastapi-runtime-zdnn
+  annotations:
+    openshift.io/display-name: "Ollama ServingRuntime (s390x — zDNN/zAIU, z17+)"
+    # Annotate with the zDNN accelerator profile once a KServe/RHOAI profile
+    # for zAIU is available.  Leave empty until the profile is defined.
+    opendatahub.io/recommended-accelerators: '[]'
+  labels:
+    opendatahub.io/dashboard: "true"
+spec:
+  multiModel: false
+  supportedModelFormats:
+    - name: any
+      version: "1"
+      autoSelect: true
+  protocolVersions:
+    - v2
+    - v1
+  containers:
+    - name: kserve-container
+      image: quay.io/brice_patchou/ollama-s390x:kserve-zdnn
+      imagePullPolicy: Always
+      ports:
+        - containerPort: 11434
+          name: http1
+          protocol: TCP
+      env:
+        - name: OLLAMA_HOST
+          value: "0.0.0.0:11434"
+        - name: OLLAMA_MODELS
+          value: "/mnt/models"
+        - name: HOME
+          value: "/mnt/models"
+        - name: OLLAMA_KEEP_ALIVE
+          value: "-1"
+        # Tell Ollama which runner sub-directory holds the zDNN-accelerated
+        # llama-server binary.  Ollama will fall back to the base payload if
+        # the directory is absent or the host lacks the zAIU co-processor.
+        - name: OLLAMA_RUNNERS_DIR
+          value: "/usr/lib/ollama/s390x_zdnn"
       resources:
         requests:
           cpu: "100m"

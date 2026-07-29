@@ -822,6 +822,79 @@ if(OLLAMA_HAVE_LLAMA_SERVER)
                 TARGETS ggml-cuda
                 CMAKE_ARGS ${_cuda_args})
             list(APPEND _backend_targets ollama-llama-server-${_backend})
+        elseif(_backend STREQUAL "s390x_vxe")
+            # ---- s390x SIMD/VXE backend (IBM z15 / LinuxONE 3+) ---------------
+            # Builds llama-server with GGML_VXE=ON using the cpu_s390x preset.
+            # Falls back to scalar on older hardware; a separate runner dir lets
+            # Ollama select the optimised binary on z15+ while still shipping
+            # the cpu_s390x base payload for z14 hosts.
+            if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "s390x")
+                message(FATAL_ERROR
+                    "OLLAMA_LLAMA_BACKENDS=s390x_vxe requires an s390x build host "
+                    "(CMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR})")
+            endif()
+            find_package(BLAS QUIET)
+            set(_s390x_vxe_args
+                -DBUILD_SHARED_LIBS=ON
+                -DGGML_BACKEND_DL=ON
+                -DGGML_CPU_ALL_VARIANTS=ON
+                -DOLLAMA_S390X_BIGENDIAN=ON
+                -DOLLAMA_S390X_VXE=ON
+                -DOLLAMA_S390X_ZDNN=OFF)
+            if(BLAS_FOUND)
+                list(APPEND _s390x_vxe_args -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS)
+            else()
+                list(APPEND _s390x_vxe_args -DGGML_BLAS=OFF)
+                message(WARNING
+                    "s390x_vxe build: OpenBLAS not found — SIMD performance will be degraded.\n"
+                    "  Install OpenBLAS: 'dnf install openblas-devel' or 'apt install libopenblas-dev'")
+            endif()
+            ollama_add_llama_server_build(${_backend}
+                PRESET cpu_s390x
+                RUNNER_DIR ${_backend}
+                TARGETS llama-server llama-quantize
+                CMAKE_ARGS ${_s390x_vxe_args})
+            list(APPEND _backend_targets ollama-llama-server-${_backend})
+        elseif(_backend STREQUAL "s390x_zdnn")
+            # ---- s390x zDNN/zAIU co-processor backend (IBM z17 / LinuxONE 5+) -
+            # Builds llama-server with GGML_ZDNN=ON.  Requires the IBM zDNN
+            # library installed on the build host.  Falls back to CPU routines
+            # on older hardware that lacks the zAIU co-processor.
+            if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "s390x")
+                message(FATAL_ERROR
+                    "OLLAMA_LLAMA_BACKENDS=s390x_zdnn requires an s390x build host "
+                    "(CMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR})")
+            endif()
+            find_library(_ollama_zdnn_lib_backend zdnn)
+            if(NOT _ollama_zdnn_lib_backend)
+                message(FATAL_ERROR
+                    "OLLAMA_LLAMA_BACKENDS=s390x_zdnn requires the IBM zDNN library (libzdnn).\n"
+                    "  Install zDNN: https://github.com/IBM/zDNN\n"
+                    "  Or remove s390x_zdnn from OLLAMA_LLAMA_BACKENDS.")
+            endif()
+            message(STATUS "  zDNN library found: ${_ollama_zdnn_lib_backend}")
+            find_package(BLAS QUIET)
+            set(_s390x_zdnn_args
+                -DBUILD_SHARED_LIBS=ON
+                -DGGML_BACKEND_DL=ON
+                -DGGML_CPU_ALL_VARIANTS=ON
+                -DOLLAMA_S390X_BIGENDIAN=ON
+                -DOLLAMA_S390X_VXE=ON
+                -DOLLAMA_S390X_ZDNN=ON)
+            if(BLAS_FOUND)
+                list(APPEND _s390x_zdnn_args -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS)
+            else()
+                list(APPEND _s390x_zdnn_args -DGGML_BLAS=OFF)
+                message(WARNING
+                    "s390x_zdnn build: OpenBLAS not found — BLAS performance will be degraded.\n"
+                    "  Install OpenBLAS: 'dnf install openblas-devel' or 'apt install libopenblas-dev'")
+            endif()
+            ollama_add_llama_server_build(${_backend}
+                PRESET cpu_s390x_zdnn
+                RUNNER_DIR ${_backend}
+                TARGETS llama-server llama-quantize
+                CMAKE_ARGS ${_s390x_zdnn_args})
+            list(APPEND _backend_targets ollama-llama-server-${_backend})
         else()
             message(FATAL_ERROR
                 "Unknown OLLAMA_LLAMA_BACKENDS entry '${_backend}'")
