@@ -1,27 +1,7 @@
 ---
-# PVC for Ollama model storage — survives pod restarts.
-# Models pulled with `ollama pull` are written here and persist across rollouts.
-#
-# Size guide:
-#   smollm:135m   —  91 MB
-#   granite3.3:2b —   1.5 GB
-#   30Gi covers ~10 medium models comfortably.
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: ollama-models-pvc
-  namespace: project-ollama
-  labels:
-    app: ollama-predictor
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 30Gi
-
----
 # Ollama InferenceService — s390x CPU inference on OpenShift AI / KServe
+# Storage: uses spyre-profiling-pvc (team shared NFS PVC, 2 TiB) with subPath
+# isolation. No dedicated PVC required — mount ollama-models subPath only.
 #
 # Apply with:
 #   oc apply -f ollama-inferenceservice.yaml -n project-ollama

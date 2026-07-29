@@ -10,25 +10,9 @@
 #     (internal: http://<inferenceservice-name>-predictor.<namespace>.svc.cluster.local:11434)
 #     (external route: https://<route-host>)
 #
-# First-time PVC creation:
-#   The PersistentVolumeClaim below is included in this file.
-#   If it already exists from a previous apply, oc apply is idempotent.
-
----
-# PersistentVolumeClaim — survives pod restarts; stores SQLite DB + uploads
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: webui-data
-  namespace: project-ollama
-  labels:
-    app: open-webui
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 10Gi
+# Storage: uses spyre-profiling-pvc (team shared NFS PVC, 2 TiB) with subPath
+# isolation so each workload writes to its own directory on the shared volume.
+# No dedicated PVC is required — an admin pre-provisioned spyre-profiling-pvc.
 
 ---
 apiVersion: apps/v1
@@ -146,10 +130,11 @@ spec:
           volumeMounts:
             - name: webui-data
               mountPath: /opt/app-root/src/data
+              subPath: open-webui
       volumes:
         - name: webui-data
           persistentVolumeClaim:
-            claimName: webui-data
+            claimName: spyre-profiling-pvc
       # OpenShift will assign an arbitrary UID — image is chown 1001:0 + g=u
       securityContext:
         runAsNonRoot: true
