@@ -2,7 +2,7 @@
 # Open WebUI — s390x OpenShift Deployment
 #
 # Apply with:
-#   oc apply -f open-webui-deployment.yaml -n project-ollama
+#   oc apply -f open-webui-deployment.yaml -n spyre-profiling
 #
 # Prerequisites:
 #   - Ollama KServe InferenceService already running in the same namespace
@@ -19,7 +19,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: open-webui
-  namespace: project-ollama
+  namespace: spyre-profiling
   labels:
     app: open-webui
 spec:
@@ -55,7 +55,7 @@ spec:
             # Format: http://<inferenceservice-name>-predictor.<namespace>.svc.cluster.local:11434
             # ----------------------------------------------------------------
             - name: OLLAMA_BASE_URL
-              value: "http://ollama-predictor-predictor.project-ollama.svc.cluster.local:11434"
+              value: "http://ollama-predictor-predictor.spyre-profiling.svc.cluster.local:11434"
             # CPU inference on s390x is slow — extend all timeouts to 30 minutes
             - name: AIOHTTP_CLIENT_TIMEOUT
               value: "1800"
@@ -144,7 +144,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: open-webui
-  namespace: project-ollama
+  namespace: spyre-profiling
   labels:
     app: open-webui
 spec:
@@ -162,7 +162,7 @@ apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
   name: open-webui
-  namespace: project-ollama
+  namespace: spyre-profiling
   labels:
     app: open-webui
   annotations:

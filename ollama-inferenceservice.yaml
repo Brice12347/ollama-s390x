@@ -4,18 +4,18 @@
 # isolation. No dedicated PVC required — mount ollama-models subPath only.
 #
 # Apply with:
-#   oc apply -f ollama-inferenceservice.yaml -n project-ollama
+#   oc apply -f ollama-inferenceservice.yaml -n spyre-profiling
 #
 # After first deploy, pull models with:
-#   oc exec -n project-ollama deployment/ollama-predictor-predictor \
+#   oc exec -n spyre-profiling deployment/ollama-predictor-predictor \
 #     -c kserve-container -- ollama pull smollm:135m
-#   oc exec -n project-ollama deployment/ollama-predictor-predictor \
+#   oc exec -n spyre-profiling deployment/ollama-predictor-predictor \
 #     -c kserve-container -- ollama pull granite3.3:2b
 apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
   name: ollama-predictor
-  namespace: project-ollama
+  namespace: spyre-profiling
   annotations:
     serving.kserve.io/deploymentMode: RawDeployment
   labels:
@@ -54,4 +54,4 @@ spec:
 # Required for s390x (set after each pod restart or bake into the image ENV):
 #   oc set env deployment/ollama-predictor-predictor -c kserve-container \
 #     OLLAMA_LOAD_TIMEOUT=30m OLLAMA_KEEP_ALIVE=-1 OLLAMA_MODELS=/mnt/models \
-#     -n project-ollama
+#     -n spyre-profiling
