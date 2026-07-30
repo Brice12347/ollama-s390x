@@ -509,7 +509,8 @@ func llamaServerLibraryPaths(exe string, gpuLibs []string, envUpdates map[string
 	// Library path ordering:
 	// 1. llama-server's own directory — ggml-base, ggml-cpu, libllama
 	// 2. GPU variant directories — cublas, cudart, backend DLL/.so
-	// 3. User/system library path
+	// 3. Accelerator subdirectories of LibOllamaPath (e.g. s390x_zdnn)
+	// 4. User/system library path
 	addPath(llamaDir)
 	for _, dir := range gpuLibs {
 		if dir == ml.LibOllamaPath || dir == llamaDir {
@@ -521,6 +522,24 @@ func llamaServerLibraryPaths(exe string, gpuLibs []string, envUpdates map[string
 			}
 		}
 		addPath(dir)
+	}
+	// Scan subdirectories of LibOllamaPath for accelerator backends (e.g. s390x_zdnn).
+	// This handles architectures like s390x where there are no GPU devices but a
+	// hardware accelerator backend (.so) lives in a subdirectory.
+	if envUpdates["GGML_BACKEND_PATH"] == "" && ml.LibOllamaPath != "" {
+		if subdirs, err := os.ReadDir(ml.LibOllamaPath); err == nil {
+			for _, d := range subdirs {
+				if !d.IsDir() {
+					continue
+				}
+				subdir := filepath.Join(ml.LibOllamaPath, d.Name())
+				if backend := findLlamaServerGPUBackend(subdir); backend != "" {
+					envUpdates["GGML_BACKEND_PATH"] = backend
+					addPath(subdir)
+					break
+				}
+			}
+		}
 	}
 	if libraryPath, ok := os.LookupEnv(llamaServerLibraryPathEnv()); ok {
 		for _, dir := range filepath.SplitList(libraryPath) {
@@ -559,6 +578,8 @@ func isLlamaServerGPUBackend(path string) bool {
 		"ggml-base",
 		"libggml-cpu",
 		"ggml-cpu",
+		"libggml-blas",
+		"ggml-blas",
 	} {
 		if strings.HasPrefix(name, prefix) {
 			return false
@@ -1311,7 +1332,7 @@ func (s *llamaServerRunner) WaitUntilRunning(ctx context.Context) error {
 		if statusChanged && status != ServerStatusReady {
 			slog.Info("waiting for llama-server to become available", "status", status)
 		}
-		if statusChanged && status == ServerStatusLoadingModel {
+		if status == ServerStatusLoadingModel {
 			lastActivity = time.Now()
 			loadDeadline = lastActivity.Add(stallTimeout)
 		}
@@ -1336,8 +1357,10 @@ func (s *llamaServerRunner) WaitUntilRunning(ctx context.Context) error {
 			if IsOutOfMemory(statusErr) {
 				return fmt.Errorf("llama-server reported out-of-memory during startup: %w", statusErr)
 			}
-			lastStatus = status
-			time.Sleep(time.Millisecond * 250)
+			if msg != "" {
+				return fmt.Errorf("llama-server startup error: %s", msg)
+			}
+			return fmt.Errorf("llama-server startup error: %w", statusErr)
 		default:
 			lastStatus = status
 			time.Sleep(time.Millisecond * 250)
