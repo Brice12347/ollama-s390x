@@ -1,0 +1,141 @@
+# vim: filetype=dockerfile
+# Containerfile.zdnn — Ollama for IBM Z / LinuxONE (s390x) with zDNN/zAIU acceleration
+#
+# Build (on z17+ with libzdnn installed):
+#   podman build --platform linux/s390x --format docker \
+#     -f Containerfile.zdnn \
+#     -t quay.io/brice_patchou/ollama-s390x:latest-zdnn .
+#
+# Push:
+#   podman push quay.io/brice_patchou/ollama-s390x:latest-zdnn
+
+ARG CMAKEVERSION=3.31.2
+ARG NINJAVERSION=1.12.1
+
+# ---------------------------------------------------------------------------
+# Stage 1 — base-s390x
+#   Toolchain layer: GCC + OpenBLAS + CMake + Ninja on Ubuntu 24.04 s390x.
+# ---------------------------------------------------------------------------
+FROM --platform=linux/s390x ubuntu:24.04 AS base-s390x
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        unzip \
+        git \
+        ccache \
+        gcc \
+        g++ \
+        make \
+        cmake \
+        ninja-build \
+        pkg-config \
+        libopenblas-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CMAKE_GENERATOR=Ninja
+ENV LDFLAGS=-s
+
+# ---------------------------------------------------------------------------
+# Stage 2 — llama-server-zdnn_s390x
+#   Builds llama-server with zDNN/zAIU acceleration enabled:
+#     OLLAMA_S390X_BIGENDIAN=ON  — big-endian GGUF byte-swap support
+#     GGML_ZDNN=ON               — zDNN/zAIU co-processor acceleration (z17+)
+#     GGML_VXE=ON                — IBM z Vector Extensions (VXE/VXE2, z15+) fallback
+#     GGML_BLAS=ON / OpenBLAS    — BLAS matrix acceleration
+#     GGML_CPU_ALL_VARIANTS=ON   — ships all CPU dispatch variants
+# ---------------------------------------------------------------------------
+FROM base-s390x AS llama-server-zdnn_s390x
+
+# Install zDNN development libraries (if available on build system)
+# libzdnn-dev provides headers and .so files for zDNN acceleration
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libzdnn-dev \
+    && rm -rf /var/lib/apt/lists/* || true
+
+COPY LLAMA_CPP_VERSION .
+COPY llama/server llama/server
+COPY llama/compat llama/compat
+
+# Build with zDNN preset — falls back gracefully to VXE/CPU if zDNN unavailable
+RUN --mount=type=cache,target=/root/.ccache \
+    cmake -S llama/server --preset cpu_s390x_zdnn \
+        && cmake --build build/llama-server-cpu_s390x_zdnn -- -l $(nproc) \
+        && cmake --install build/llama-server-cpu_s390x_zdnn --component llama-server --strip
+
+# ---------------------------------------------------------------------------
+# Stage 3 — Go build
+#   Compiles the ollama Go binary for linux/s390x with CGO enabled.
+# ---------------------------------------------------------------------------
+FROM base-s390x AS build
+
+WORKDIR /go/src/github.com/ollama/ollama
+
+COPY go.mod go.sum .
+
+# Download the correct Go toolchain for s390x
+RUN curl -fsSL \
+        https://golang.org/dl/go$(awk '/^go/ { print $2 }' go.mod).linux-s390x.tar.gz \
+    | tar xz -C /usr/local
+
+ENV PATH=/usr/local/go/bin:$PATH
+
+RUN go mod download
+
+COPY . .
+
+ARG GOFLAGS="'-ldflags=-w -s'"
+ENV CGO_ENABLED=1
+
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    go build -trimpath -buildmode=pie -o /bin/ollama .
+
+# ---------------------------------------------------------------------------
+# Stage 4 — Final runtime image (zDNN variant)
+#   Minimal Ubuntu 24.04 s390x image with zDNN runtime libraries
+# ---------------------------------------------------------------------------
+FROM --platform=linux/s390x ubuntu:24.04
+
+# Runtime dependencies:
+#   - libopenblas0: BLAS matrix acceleration
+#   - libzdnn: zDNN/zAIU runtime (z17+ only, graceful fallback on z15/z14)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libopenblas0 \
+        libzdnn \
+    && rm -rf /var/lib/apt/lists/* || true
+
+# Copy the ollama binary and the native runtime libraries
+COPY --from=build        /bin/ollama              /usr/bin/ollama
+COPY --from=llama-server-zdnn_s390x \
+                         dist/lib/ollama          /usr/lib/ollama
+
+# Also copy zDNN-specific runner directory if present
+RUN mkdir -p /usr/lib/ollama/s390x_zdnn && ls -la /usr/lib/ollama/ || true
+
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV LD_LIBRARY_PATH=/usr/lib/ollama
+
+# Non-root user — uid 10001
+RUN useradd -r -s /sbin/nologin -u 10001 -m -d /home/ollama ollama \
+    && mkdir -p /home/ollama/.ollama \
+    && chown -R ollama:ollama /home/ollama/.ollama
+
+# Default to localhost; override with OLLAMA_HOST at runtime for cross-container access
+ENV OLLAMA_HOST=127.0.0.1:11434
+ENV OLLAMA_MODELS=/home/ollama/.ollama/models
+
+EXPOSE 11434
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -sf http://127.0.0.1:11434/ || exit 1
+
+USER ollama
+
+ENTRYPOINT ["/usr/bin/ollama"]
+CMD ["serve"]
