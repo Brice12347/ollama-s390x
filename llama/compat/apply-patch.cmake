@@ -43,6 +43,25 @@ foreach(_patch_entry IN LISTS _patch_entries)
         continue()
     endif()
 
+    # Check whether all files referenced by the patch actually exist before
+    # attempting to apply.  A patch targeting a file that is absent in the
+    # current source tree (e.g. a model added in a later llama.cpp revision
+    # than the fork provides) would otherwise produce a fatal error.  Instead,
+    # skip with a warning so the rest of the patches still apply cleanly.
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E env ${_git_apply_env}
+            ${GIT_EXECUTABLE} apply --check "${PATCH_FILE}"
+        RESULT_VARIABLE _check_result
+        OUTPUT_QUIET ERROR_QUIET
+    )
+    if(NOT _check_result EQUAL 0)
+        message(WARNING
+            "llama/compat: skipping ${_patch_rel} — patch does not apply cleanly "
+            "(source tree may be missing files added in a later llama.cpp revision). "
+            "This is expected when building against a fork that predates this patch.")
+        continue()
+    endif()
+
     # Otherwise, apply forward.
     execute_process(
         COMMAND ${CMAKE_COMMAND} -E env ${_git_apply_env}

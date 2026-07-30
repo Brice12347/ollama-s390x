@@ -7,7 +7,7 @@
 include(ExternalProject)
 
 set(OLLAMA_LLAMA_BACKENDS "" CACHE STRING
-    "Semicolon-separated llama-server GPU backends to build: cuda_v12;cuda_v13;rocm_v7_1;rocm_v7_2;vulkan;cuda_jetpack5;cuda_jetpack6;s390x_vxe;s390x_zdnn")
+    "Semicolon-separated llama-server GPU backends to build: cuda_v12;cuda_v13;rocm_v7_1;rocm_v7_2;vulkan;cuda_jetpack5;cuda_jetpack6;s390x_vxe;s390x_zdnn;s390x_spyre")
 set(_ollama_mlx_backends_doc "Semicolon-separated MLX backends to build: cuda_v13;metal_v3;metal_v4")
 set(OLLAMA_VERSION "0.0.0" CACHE STRING "Ollama version embedded in the local Go binary")
 set(OLLAMA_PAYLOAD_INSTALL_PREFIX "${CMAKE_BINARY_DIR}" CACHE PATH
@@ -894,6 +894,38 @@ if(OLLAMA_HAVE_LLAMA_SERVER)
                 RUNNER_DIR ${_backend}
                 TARGETS llama-server llama-quantize
                 CMAKE_ARGS ${_s390x_zdnn_args})
+            list(APPEND _backend_targets ollama-llama-server-${_backend})
+        elseif(_backend STREQUAL "s390x_spyre")
+            # ---- s390x Spyre backend scaffolding ---------------------------------
+            # Mirrors the VXE-enabled cpu_s390x preset for now so packaging and
+            # deployment can target a distinct runner directory while native
+            # Spyre support is developed in llama.cpp/GGML.
+            if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "s390x")
+                message(FATAL_ERROR
+                    "OLLAMA_LLAMA_BACKENDS=s390x_spyre requires an s390x build host "
+                    "(CMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR})")
+            endif()
+            find_package(BLAS QUIET)
+            set(_s390x_spyre_args
+                -DBUILD_SHARED_LIBS=ON
+                -DGGML_BACKEND_DL=ON
+                -DGGML_CPU_ALL_VARIANTS=ON
+                -DOLLAMA_S390X_BIGENDIAN=ON
+                -DOLLAMA_S390X_VXE=ON
+                -DOLLAMA_S390X_ZDNN=OFF)
+            if(BLAS_FOUND)
+                list(APPEND _s390x_spyre_args -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS)
+            else()
+                list(APPEND _s390x_spyre_args -DGGML_BLAS=OFF)
+                message(WARNING
+                    "s390x_spyre build: OpenBLAS not found — scaffolding build will use degraded CPU performance.\n"
+                    "  Install OpenBLAS: 'dnf install openblas-devel' or 'apt install libopenblas-dev'")
+            endif()
+            ollama_add_llama_server_build(${_backend}
+                PRESET cpu_s390x_spyre
+                RUNNER_DIR ${_backend}
+                TARGETS llama-server llama-quantize
+                CMAKE_ARGS ${_s390x_spyre_args})
             list(APPEND _backend_targets ollama-llama-server-${_backend})
         else()
             message(FATAL_ERROR
