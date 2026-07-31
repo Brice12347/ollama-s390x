@@ -1,0 +1,17 @@
+# ollama-route.yaml
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ollama-predictor
+  namespace: spyre-profiling
+  labels:
+    app: ollama-predictor
+spec:
+  to:
+    kind: Service
+    name: ollama-predictor-predictor   # the service already visible in your cluster
+  port:
+    targetPort: http1                  # the named port from the ServingRuntime
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
