@@ -1,4 +1,15 @@
 # ollama-route.yaml
+#
+# Exposes the Ollama inference server externally via an OpenShift edge-TLS Route.
+# Points at ollama-predictor-http (the regular ClusterIP service in ollama-svc.yaml),
+# NOT the headless KServe-managed service which cannot back a Route.
+#
+# Apply with:
+#   oc apply -f ollama-svc.yaml   -n spyre-profiling
+#   oc apply -f ollama-route.yaml -n spyre-profiling
+#
+# The resulting external URL will be:
+#   https://ollama-predictor-spyre-profiling.apps.spyre-test-1.pok.stglabs.ibm.com
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
@@ -9,9 +20,9 @@ metadata:
 spec:
   to:
     kind: Service
-    name: ollama-predictor-predictor   # the service already visible in your cluster
+    name: ollama-predictor-http    # regular ClusterIP service — see ollama-svc.yaml
   port:
-    targetPort: http1                  # the named port from the ServingRuntime
+    targetPort: http1              # named port on the service (11434)
   tls:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect

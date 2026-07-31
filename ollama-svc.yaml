@@ -1,0 +1,29 @@
+# ollama-svc.yaml
+#
+# Regular ClusterIP Service that selects the Ollama predictor pod on port 11434.
+# The existing KServe-managed service (ollama-predictor-predictor) is headless
+# (ClusterIP: None) and cannot back an OpenShift Route. This service provides
+# a stable ClusterIP that the Route can target.
+#
+# Selector derived from:
+#   oc get pod ollama-predictor-predictor-* --show-labels
+#   → app=isvc.ollama-predictor-predictor
+#
+# Apply with:
+#   oc apply -f ollama-svc.yaml -n spyre-profiling
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-predictor-http
+  namespace: spyre-profiling
+  labels:
+    app: ollama-predictor
+spec:
+  type: ClusterIP
+  selector:
+    app: isvc.ollama-predictor-predictor   # matches the pod label exactly
+  ports:
+    - name: http1
+      port: 11434
+      targetPort: 11434
+      protocol: TCP
