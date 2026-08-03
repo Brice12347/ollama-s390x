@@ -55,20 +55,20 @@ spec:
           value: "-1"
       resources:
         requests:
-          cpu: "100m"
-          memory: 256Mi
+          cpu: "4"
+          memory: 8Gi
       readinessProbe:
         httpGet:
           path: /
           port: 11434
-        initialDelaySeconds: 20
-        periodSeconds: 10
+        initialDelaySeconds: 120
+        periodSeconds: 30
       livenessProbe:
         httpGet:
           path: /
           port: 11434
-        initialDelaySeconds: 30
-        periodSeconds: 20
+        initialDelaySeconds: 180
+        periodSeconds: 30
 
 ---
 # ---------------------------------------------------------------------------
