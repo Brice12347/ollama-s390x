@@ -135,6 +135,100 @@ install_success() {
 }
 trap install_success EXIT
 
+# ---------------------------------------------------------------------------
+# s390x helpers
+# ---------------------------------------------------------------------------
+
+# detect_zdnn — returns 0 (true) when the current host has IBM NNPA/zAIU
+# co-processor support (z17 / LinuxONE 5 or later) and can therefore run
+# binaries built with -DGGML_ZDNN=ON.
+#
+# Detection order (first match wins):
+#   1. Machine type in /proc/cpuinfo  (3932 = z17, 3934 = LinuxONE 5)
+#   2. NNPA facility bit 165 in the CPU facilities list
+#   3. libzdnn runtime already present on the system (ldconfig -p)
+detect_zdnn() {
+    if [ -f /proc/cpuinfo ]; then
+        # Method 1: machine type — most reliable, does not require libzdnn
+        _machine=$(grep "^machine" /proc/cpuinfo | awk '{print $3}' | head -1)
+        case "$_machine" in
+            3932|3934) return 0 ;;   # IBM z17 / LinuxONE 5
+        esac
+
+        # Method 2: NNPA facility bit 165
+        if grep -q "^facilities" /proc/cpuinfo 2>/dev/null; then
+            if grep "^facilities" /proc/cpuinfo | grep -qw "165"; then
+                return 0
+            fi
+        fi
+    fi
+
+    # Method 3: libzdnn shared library already installed on this host
+    if ldconfig -p 2>/dev/null | grep -q "libzdnn"; then
+        return 0
+    fi
+
+    return 1
+}
+
+# configure_systemd_s390x — minimal systemd service for IBM Z.
+# Omits GPU groups (render, video) which don't exist on Z hardware.
+# Sets OLLAMA_RUNNERS_DIR when the zDNN payload was installed.
+configure_systemd_s390x() {
+    if ! getent group ollama >/dev/null 2>&1; then
+        $SUDO groupadd -r ollama
+    fi
+    if ! id ollama >/dev/null 2>&1; then
+        status "Creating ollama user..."
+        $SUDO useradd -r -s /bin/false -g ollama -m -d /usr/share/ollama ollama
+    fi
+
+    status "Adding current user to ollama group..."
+    $SUDO usermod -a -G ollama "$(whoami)"
+
+    status "Creating ollama systemd service..."
+    # If the zDNN runner was installed, point Ollama at it so it is picked up
+    # automatically on z17 hardware.  On z15/z16 the variable is left unset
+    # and Ollama falls back to the VXE runner in lib/ollama/.
+    _runners_env=""
+    if [ "${ZDNN_INSTALLED:-false}" = "true" ]; then
+        _runners_env="Environment=\"OLLAMA_RUNNERS_DIR=$OLLAMA_INSTALL_DIR/lib/ollama/s390x_zdnn\""
+    fi
+
+    cat <<EOF | $SUDO tee /etc/systemd/system/ollama.service >/dev/null
+[Unit]
+Description=Ollama Service
+After=network-online.target
+
+[Service]
+ExecStart=$BINDIR/ollama serve
+User=ollama
+Group=ollama
+Restart=always
+RestartSec=3
+Environment="PATH=$PATH"
+$_runners_env
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    SYSTEMCTL_RUNNING="$(systemctl is-system-running || true)"
+    case $SYSTEMCTL_RUNNING in
+        running|degraded)
+            status "Enabling and starting ollama service..."
+            $SUDO systemctl daemon-reload
+            $SUDO systemctl enable ollama
+
+            start_service() { $SUDO systemctl restart ollama; }
+            trap start_service EXIT
+            ;;
+        *)
+            warning "systemd is not running — ollama service not started"
+            ;;
+    esac
+}
+
 # Function to download and extract with fallback from zst to tgz
 download_and_extract() {
     local url_base="$1"
@@ -181,7 +275,30 @@ $SUDO install -o0 -g0 -m755 -d "$OLLAMA_INSTALL_DIR/lib/ollama"
 # s390x binaries are hosted on the Brice12347/ollama-s390x GitHub releases;
 # all other architectures download from ollama.com.
 if [ "$ARCH" = "s390x" ]; then
-    download_and_extract "https://github.com/Brice12347/ollama-s390x/releases/latest/download" "$OLLAMA_INSTALL_DIR" "ollama-linux-s390x"
+    S390X_REPO_SLUG="Brice12347/ollama-s390x"
+    S390X_REPO="https://github.com/${S390X_REPO_SLUG}"
+
+    # Base payload: VXE/SIMD-accelerated runner (z15 / z16 / z17)
+    status "Downloading Ollama for IBM Z / LinuxONE (s390x — VXE)..."
+    download_and_extract "${S390X_REPO}/releases/latest/download" "$OLLAMA_INSTALL_DIR" "ollama-linux-s390x"
+
+    # Optional zDNN payload: NNPA/zAIU co-processor runner (z17+ only)
+    # Downloads a second tarball that installs lib/ollama/s390x_zdnn/llama-server
+    # built with -DGGML_ZDNN=ON.  Ollama's runner selection logic will
+    # automatically prefer the s390x_zdnn runner on a z17 host at runtime.
+    ZDNN_INSTALLED=false
+    if detect_zdnn; then
+        status "IBM NNPA/zAIU co-processor detected (z17 / LinuxONE 5+)."
+        status "Installing zDNN-accelerated runner..."
+        if download_and_extract "${S390X_REPO}/releases/latest/download" "$OLLAMA_INSTALL_DIR" "ollama-linux-s390x-zdnn"; then
+            ZDNN_INSTALLED=true
+            status "zDNN runner installed at $OLLAMA_INSTALL_DIR/lib/ollama/s390x_zdnn"
+        else
+            warning "zDNN runner download failed — continuing with VXE runner only."
+        fi
+    else
+        status "No NNPA co-processor detected. Using VXE/CPU runner."
+    fi
 else
     download_and_extract "https://ollama.com/download" "$OLLAMA_INSTALL_DIR" "ollama-linux-${ARCH}"
 fi
@@ -274,14 +391,18 @@ if [ "$IS_WSL2" = true ]; then
     exit 0
 fi
 
-# s390x systems don't use consumer GPUs - skip GPU detection
+# s390x systems don't use consumer GPUs — skip GPU detection.
+# Register shared libraries with the system linker so llama-server can find
+# them, configure systemd, and exit.
 if [ "$ARCH" = "s390x" ]; then
-    # Register shared libraries with the system linker so llama-server can find them
     if [ -d "$OLLAMA_INSTALL_DIR/lib/ollama" ]; then
         status "Registering ollama shared libraries..."
         (cd "$OLLAMA_INSTALL_DIR/lib/ollama" && for f in *.so; do $SUDO ln -sf "$f" "${f}.0" 2>/dev/null || true; done)
         echo "$OLLAMA_INSTALL_DIR/lib/ollama" | $SUDO tee /etc/ld.so.conf.d/ollama.conf >/dev/null
         $SUDO ldconfig
+    fi
+    if available systemctl; then
+        configure_systemd_s390x
     fi
     install_success
     exit 0

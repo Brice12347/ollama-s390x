@@ -17,6 +17,11 @@ metadata:
   namespace: spyre-profiling
   labels:
     app: ollama-predictor
+  annotations:
+    # CPU inference on s390x can take minutes for 1.5B+ models.
+    # OpenShift's default Route timeout is 30s — raise to match the
+    # Open WebUI client timeout in open-webui-deployment.yaml.
+    haproxy.router.openshift.io/timeout: 30m
 spec:
   to:
     kind: Service

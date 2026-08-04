@@ -716,11 +716,133 @@ jobs:
           docker buildx imagetools inspect ${{ vars.DOCKER_REPO }}:${{ steps.metadata.outputs.version }}
         working-directory: ${{ runner.temp }}
 
+  # ---------------------------------------------------------------------------
+  # s390x zDNN release build
+  #
+  # Runs on a self-hosted IBM z17 (or LinuxONE 5) runner tagged `s390x-zdnn`.
+  # Requires libzdnn-dev installed on that runner.
+  #
+  # Produces: ollama-linux-s390x-zdnn.tgz
+  #   Contents: bin/ollama  +  lib/ollama/s390x_zdnn/llama-server (zDNN-linked)
+  #
+  # The base VXE payload (ollama-linux-s390x.tgz) is produced separately and
+  # uploaded by the docker-build-push job when a linux/s390x target is added.
+  # For now this job builds both the Go binary and the zDNN llama-server from
+  # source on the native z17 runner so no cross-compilation is needed.
+  # ---------------------------------------------------------------------------
+  s390x-zdnn-build:
+    runs-on: [self-hosted, s390x-zdnn]
+    environment: release
+    needs: setup-environment
+    env:
+      GOFLAGS: ${{ needs.setup-environment.outputs.GOFLAGS }}
+      VERSION: ${{ needs.setup-environment.outputs.VERSION }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify s390x + zDNN prerequisites
+        run: |
+          uname -m | grep -q s390x || { echo "::error::This job must run on s390x"; exit 1; }
+          ldconfig -p | grep -q libzdnn || { echo "::error::libzdnn not found — install libzdnn-dev on the runner"; exit 1; }
+          cmake --version
+          ninja --version || true
+          go version
+
+      - name: Install Go toolchain
+        run: |
+          set -euo pipefail
+          GO_VERSION=$(awk '/^go/ { print $2 }' go.mod)
+          GO_TAR="go${GO_VERSION}.linux-s390x.tar.gz"
+          if ! go version 2>/dev/null | grep -q "${GO_VERSION}"; then
+            curl -fsSL "https://golang.org/dl/${GO_TAR}" | sudo tar -xz -C /usr/local
+          fi
+          echo "/usr/local/go/bin" >> "$GITHUB_PATH"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libopenblas-dev libzdnn-dev ninja-build ccache
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-s390x-zdnn-${{ needs.setup-environment.outputs.vendorsha }}
+          restore-keys: ccache-s390x-zdnn-
+
+      - name: Build llama-server (zDNN preset)
+        run: |
+          set -euo pipefail
+          cmake -S llama/server --preset cpu_s390x_zdnn
+          cmake --build build/llama-server-cpu_s390x_zdnn \
+            --parallel "$(nproc)" \
+            -- --load-average "$(nproc)"
+          cmake --install build/llama-server-cpu_s390x_zdnn \
+            --component llama-server \
+            --strip
+
+      - name: Build ollama Go binary
+        env:
+          CGO_ENABLED: "1"
+          GOARCH: s390x
+          GOOS: linux
+        run: |
+          go build \
+            -trimpath \
+            -buildmode=pie \
+            ${{ env.GOFLAGS }} \
+            -o dist/linux-s390x/bin/ollama \
+            .
+
+      - name: Assemble zdnn payload
+        run: |
+          set -euo pipefail
+          DEST=dist/linux-s390x-zdnn
+          mkdir -p "$DEST/lib/ollama/s390x_zdnn"
+
+          # ollama binary (shared with base s390x payload)
+          cp dist/linux-s390x/bin/ollama "$DEST/bin/ollama" 2>/dev/null || \
+            { mkdir -p "$DEST/bin" && cp dist/linux-s390x/bin/ollama "$DEST/bin/ollama"; }
+
+          # zDNN-linked llama-server and its GGML shared libraries
+          # cmake --install copies them to dist/lib/ollama/
+          cp -r dist/lib/ollama/. "$DEST/lib/ollama/s390x_zdnn/"
+
+          echo "=== zdnn payload ==="
+          find "$DEST" -type f | sort
+
+      - name: Create zdnn tarball
+        run: |
+          set -euo pipefail
+          DEST=dist/linux-s390x-zdnn
+          tar c \
+            -C "$DEST" \
+            --owner 0 --group 0 \
+            bin lib \
+          | gzip -9 > ollama-linux-s390x-zdnn.tgz
+          echo "=== tarball contents ==="
+          tar tzf ollama-linux-s390x-zdnn.tgz | sort
+
+      - name: Verify tarball contains llama-server
+        run: |
+          tar tzf ollama-linux-s390x-zdnn.tgz | grep -q "s390x_zdnn" \
+            || { echo "::error::s390x_zdnn runner missing from tarball"; exit 1; }
+          tar tzf ollama-linux-s390x-zdnn.tgz | grep -q "bin/ollama" \
+            || { echo "::error::ollama binary missing from tarball"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundles-linux-s390x-zdnn
+          path: ollama-linux-s390x-zdnn.tgz
+
   # Final release process
   release:
     runs-on: ubuntu-latest
     environment: release
-    needs: [darwin-build, windows-app, docker-build-push]
+    needs: [darwin-build, windows-app, docker-build-push, s390x-zdnn-build]
     permissions:
       contents: write
     env:
