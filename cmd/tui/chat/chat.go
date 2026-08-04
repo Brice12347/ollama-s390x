@@ -141,6 +141,8 @@ type chatModel struct {
 	permissionNotice   string
 	selection          chatSelection
 
+	systemPromptDisabled bool
+
 	width              int
 	height             int
 	status             string
@@ -595,6 +597,9 @@ func (m chatModel) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.applySlashCompletion() {
+			return m, nil
+		}
+		if m.applyMentionCompletion() {
 			return m, nil
 		}
 		return m.handleSubmit()

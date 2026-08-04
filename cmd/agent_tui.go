@@ -48,24 +48,16 @@ func saveLastAgentModel(model string) error {
 }
 
 func prepareAgentModel(cmd *cobra.Command, client *api.Client, opts *agentTUIOptions, thinkExplicit bool) (*api.ShowResponse, error) {
-	requestedCloud := modelref.HasExplicitCloudSource(opts.Model)
-	info, err := func() (*api.ShowResponse, error) {
-		info, err := client.Show(cmd.Context(), &api.ShowRequest{Model: opts.Model})
-		var se api.StatusError
-		if errors.As(err, &se) && se.StatusCode == http.StatusNotFound {
-			if requestedCloud {
-				return nil, err
-			}
-			if err := PullHandler(cmd, []string{opts.Model}); err != nil {
-				return nil, err
-			}
-			return client.Show(cmd.Context(), &api.ShowRequest{Model: opts.Model})
-		}
-		return info, err
-	}()
+	// Unlike `ollama run`, the bare `ollama` root command doesn't define
+	// --insecure, so GetBool would error; treat it as false.
+	insecure, _ := cmd.Flags().GetBool("insecure")
+	info, resolved, err := showOrPullModel(cmd, client, opts.Model, insecure, "run")
 	if err != nil {
 		return nil, err
 	}
+	// The model may have been resolved to a different name (e.g. its
+	// ":cloud" variant).
+	opts.Model = resolved
 
 	ensureCloudStub(cmd.Context(), client, opts.Model)
 	opts.Think, err = inferThinkingOption(&info.Capabilities, &runOptions{Model: opts.Model, Think: opts.Think}, thinkExplicit)
@@ -88,6 +80,9 @@ func GenerateAgentTUI(cmd *cobra.Command, client *api.Client, opts agentTUIOptio
 		catalog, err := coreagent.LoadDefaultSkills(cwd)
 		if err != nil {
 			return nil, err
+		}
+		if ignored := catalog.ExcludeNames(agentchat.BuiltinSlashCommandNames()); len(ignored) > 0 {
+			fmt.Fprintf(os.Stderr, "\033[1mwarning:\033[0m ignoring agent skill(s): %s\n", strings.Join(ignored, ", "))
 		}
 		for _, diagnostic := range catalog.Diagnostics() {
 			fmt.Fprintf(os.Stderr, "\033[1mwarning:\033[0m ignored invalid agent skill: %v\n", diagnostic)
@@ -175,41 +170,17 @@ func agentSkillSystemContext(catalog *coreagent.SkillCatalog, registry *coreagen
 	return catalog.SystemContext()
 }
 
-func selectAgentModel(ctx context.Context, client *api.Client, current string) (string, error) {
-	models, err := agentModelOptions(ctx, client)
-	if err != nil {
-		return "", err
-	}
-	if len(models) == 0 {
-		return "", errors.New("no models available, run 'ollama pull <model>' first")
-	}
-
-	items := agentSelectionItems(models)
-	switch {
-	case launch.DefaultSingleSelectorWithUpdates != nil:
-		return launch.DefaultSingleSelectorWithUpdates("Select model to run:", items, current, nil)
-	case launch.DefaultSingleSelector != nil:
-		return launch.DefaultSingleSelector("Select model to run:", items, current)
-	default:
-		return "", errors.New("no selector configured")
-	}
-}
-
 func agentSelectionItems(models []agentchat.ModelOption) []launch.SelectionItem {
 	items := make([]launch.SelectionItem, 0, len(models))
 	for _, model := range models {
 		items = append(items, launch.SelectionItem{
 			Name:              model.Name,
-			Description:       agentSelectionDescription(model),
+			Description:       strings.TrimSpace(model.Description),
 			Recommended:       model.Recommended,
 			AvailabilityBadge: model.AvailabilityBadge,
 		})
 	}
 	return items
-}
-
-func agentSelectionDescription(model agentchat.ModelOption) string {
-	return strings.TrimSpace(model.Description)
 }
 
 var agentGetwd = os.Getwd
