@@ -57,6 +57,9 @@ spec:
         requests:
           cpu: "4"
           memory: 8Gi
+        limits:
+          cpu: "8"
+          memory: 16Gi
       readinessProbe:
         httpGet:
           path: /
@@ -121,20 +124,23 @@ spec:
           value: "/usr/lib/ollama/s390x_vxe"
       resources:
         requests:
-          cpu: "100m"
-          memory: 256Mi
+          cpu: "4"
+          memory: 8Gi
+        limits:
+          cpu: "8"
+          memory: 16Gi
       readinessProbe:
         httpGet:
           path: /
           port: 11434
-        initialDelaySeconds: 20
-        periodSeconds: 10
+        initialDelaySeconds: 120
+        periodSeconds: 30
       livenessProbe:
         httpGet:
           path: /
           port: 11434
-        initialDelaySeconds: 30
-        periodSeconds: 20
+        initialDelaySeconds: 180
+        periodSeconds: 30
 
 ---
 # ---------------------------------------------------------------------------
@@ -188,17 +194,20 @@ spec:
           value: "/usr/lib/ollama/s390x_zdnn"
       resources:
         requests:
-          cpu: "100m"
-          memory: 256Mi
+          cpu: "4"
+          memory: 8Gi
+        limits:
+          cpu: "8"
+          memory: 16Gi
       readinessProbe:
         httpGet:
           path: /
           port: 11434
-        initialDelaySeconds: 20
-        periodSeconds: 10
+        initialDelaySeconds: 120
+        periodSeconds: 30
       livenessProbe:
         httpGet:
           path: /
           port: 11434
-        initialDelaySeconds: 30
-        periodSeconds: 20
+        initialDelaySeconds: 180
+        periodSeconds: 30
