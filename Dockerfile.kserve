@@ -11,6 +11,7 @@
 
 ARG CMAKEVERSION=3.31.2
 ARG NINJAVERSION=1.12.1
+ARG ZDNN_VERSION=v1.1.1
 
 # ---------------------------------------------------------------------------
 # Stage 1 — base-s390x
@@ -38,7 +39,33 @@ ENV CMAKE_GENERATOR=Ninja
 ENV LDFLAGS=-s
 
 # ---------------------------------------------------------------------------
-# Stage 2 — llama-server-cpu_s390x
+# Stage 2 — zdnn-builder
+#   Builds the zDNN library from source (IBM/zDNN tag ZDNN_VERSION).
+#   Installs headers + shared lib under /usr/local so downstream stages
+#   can reference -DZDNN_ROOT=/usr/local when they opt in to zDNN.
+#   This stage intentionally does NOT build llama.cpp; it is a pure
+#   library layer that can be reused by any consumer stage.
+# ---------------------------------------------------------------------------
+FROM base-s390x AS zdnn-builder
+
+ARG ZDNN_VERSION
+
+RUN dnf install -y --nodocs autoconf automake libtool \
+    && dnf clean all
+
+RUN git clone --depth 1 -b ${ZDNN_VERSION} \
+        https://github.com/IBM/zDNN.git /zdnn
+
+WORKDIR /zdnn
+
+RUN autoconf \
+    && ./configure --prefix=/usr/local \
+    && make -j$(nproc) build \
+    && make install \
+    && ldconfig
+
+# ---------------------------------------------------------------------------
+# Stage 3 — llama-server-cpu_s390x
 #   Builds llama-server using the cpu_s390x CMake preset.
 # ---------------------------------------------------------------------------
 FROM base-s390x AS llama-server-cpu_s390x
@@ -52,7 +79,7 @@ RUN cmake -S llama/server --preset cpu_s390x \
         && cmake --install build/llama-server-cpu_s390x --component llama-server --strip
 
 # ---------------------------------------------------------------------------
-# Stage 3 — Go build
+# Stage 4 — Go build
 #   Compiles the ollama Go binary for linux/s390x with CGO enabled.
 # ---------------------------------------------------------------------------
 FROM base-s390x AS build
@@ -77,7 +104,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -buildmode=pie -o /bin/ollama .
 
 # ---------------------------------------------------------------------------
-# Stage 4 — UBI 9 minimal runtime (KServe / OpenShift AI compatible)
+# Stage 5 — UBI 9 minimal runtime (KServe / OpenShift AI compatible)
 #   Red Hat UBI 9 minimal satisfies OpenShift AI / KServe image policy.
 #   microdnf is the package manager in ubi-minimal.
 # ---------------------------------------------------------------------------
@@ -85,6 +112,11 @@ FROM --platform=linux/s390x registry.redhat.io/ubi9/ubi-minimal:latest
 
 RUN microdnf install -y openblas --nodocs \
     && microdnf clean all
+
+# Copy zDNN shared library into the runtime image so the zDNN backend
+# can be loaded at inference time on z16/z17 hardware with NNPA.
+COPY --from=zdnn-builder /usr/local/lib/libzdnn.so*  /usr/lib/
+COPY --from=zdnn-builder /usr/local/include/zdnn.h   /usr/include/
 
 COPY --from=build                  /bin/ollama       /usr/bin/ollama
 COPY --from=llama-server-cpu_s390x dist/lib/ollama   /usr/lib/ollama
