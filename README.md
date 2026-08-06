@@ -36,6 +36,18 @@ curl -fsSL https://ollama.com/install.sh | sh
 
 ### IBM Z (s390x)
 
+> **Full step-by-step guides:** [docs/README.md](docs/README.md)
+>
+> | Step | Guide |
+> |---|---|
+> | 1 | [Install (one-liner)](docs/1-install.md) |
+> | 2 | [Build from source](docs/2-build-from-source.md) |
+> | 3 | [Container build](docs/3-container-build.md) |
+> | 4 | [Deploy on OpenShift AI](docs/4-openshift-deploy.md) |
+> | 5 | [Add OpenWebUI](docs/5-open-webui.md) |
+> | 6 | [Endianness fix explained](docs/6-endianness-fix.md) |
+> | 7 | [Model selection](docs/7-models.md) |
+
 For Linux on IBM Z (s390x) — including z15/z16 LPARs and IBM LinuxONE — use this fork's install script, which replaces the upstream x86/ARM binaries with s390x-compatible builds:
 
 ```shell
