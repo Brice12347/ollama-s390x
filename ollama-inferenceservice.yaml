@@ -1,21 +1,23 @@
 ---
 # Ollama InferenceService — s390x CPU inference on OpenShift AI / KServe
-# Storage: uses spyre-profiling-pvc (team shared NFS PVC, 2 TiB) with subPath
-# isolation. No dedicated PVC required — mount ollama-models subPath only.
+#
+# NAMESPACE: must match the namespace where ollama-servingruntime.yaml was applied.
+# Default is project-ollama. Change both files if you use a different namespace.
 #
 # Apply with:
-#   oc apply -f ollama-inferenceservice.yaml -n spyre-profiling
+#   oc apply -f ollama-servingruntime.yaml -n project-ollama
+#   oc apply -f ollama-inferenceservice.yaml -n project-ollama
 #
 # After first deploy, pull models with:
-#   oc exec -n spyre-profiling deployment/ollama-predictor-predictor \
+#   oc exec -n project-ollama deployment/ollama-predictor-predictor \
 #     -c kserve-container -- ollama pull smollm:135m
-#   oc exec -n spyre-profiling deployment/ollama-predictor-predictor \
+#   oc exec -n project-ollama deployment/ollama-predictor-predictor \
 #     -c kserve-container -- ollama pull granite3.3:2b
 apiVersion: serving.kserve.io/v1beta1
 kind: InferenceService
 metadata:
   name: ollama-predictor
-  namespace: spyre-profiling
+  namespace: project-ollama
   annotations:
     serving.kserve.io/deploymentMode: RawDeployment
   labels:
@@ -37,9 +39,8 @@ spec:
         name: any
       runtime: ollama
       # No storageUri — KServe mounts storageUri read-only which prevents
-      # Ollama from writing its key/config files under /mnt/models/.ollama.
-      # Models are stored on the ollama-model-storage PVC mounted via the
-      # Deployment directly (oc set env OLLAMA_MODELS=/ollama-storage).
+      # Ollama from writing its key/config files under the models directory.
+      # Pull models manually with `oc exec` after the pod is Running.
       resources:
         requests:
           cpu: "500m"
@@ -53,5 +54,5 @@ spec:
 #
 # Required for s390x (set after each pod restart or bake into the image ENV):
 #   oc set env deployment/ollama-predictor-predictor -c kserve-container \
-#     OLLAMA_LOAD_TIMEOUT=30m OLLAMA_KEEP_ALIVE=-1 OLLAMA_MODELS=/mnt/models \
-#     -n spyre-profiling
+#     OLLAMA_LOAD_TIMEOUT=30m OLLAMA_KEEP_ALIVE=-1 \
+#     -n project-ollama
