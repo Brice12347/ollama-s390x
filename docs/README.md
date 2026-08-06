@@ -17,6 +17,7 @@ by Brice Patchou and Justin Veltri (IBM Poughkeepsie, 2026 summer internship).
 | 5 | [OpenWebUI](5-open-webui.md) | Add a ChatGPT-style UI connected to the s390x Ollama backend |
 | 6 | [Endianness fix](6-endianness-fix.md) | Deep-dive: why GGUF byte-swapping is needed and how the patches work |
 | 7 | [Model selection](7-models.md) | Compatibility matrix, RAM requirements, and quantization guidance |
+| 8 | [Benchmarks](8-benchmarks.md) | CPU/VXE measured numbers and zDNN comparison (zDNN not yet measured) |
 
 ---
 
