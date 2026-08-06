@@ -1,13 +1,21 @@
 # vim: filetype=dockerfile
 # Dockerfile.kserve — Ollama for IBM Z / LinuxONE (s390x), UBI 9 runtime
 #
-# Build:
-#   podman build --platform linux/s390x --format docker \
-#     -f Dockerfile.kserve \
-#     -t quay.io/justinveltri/ollama-s390x:kserve .
+# Builds two images depending on the --target flag:
+#
+#   CPU/VXE image (default):
+#     podman build --platform linux/s390x --format docker \
+#       -f Dockerfile.kserve \
+#       -t quay.io/justinveltri/ollama-s390x:kserve .
+#
+#   zDNN image (IBM z17+ with libzdnn):
+#     podman build --platform linux/s390x --format docker \
+#       -f Dockerfile.kserve --target runtime-zdnn \
+#       -t quay.io/justinveltri/ollama-s390x:kserve-zdnn .
 #
 # Push:
 #   podman push quay.io/justinveltri/ollama-s390x:kserve
+#   podman push quay.io/justinveltri/ollama-s390x:kserve-zdnn
 
 ARG CMAKEVERSION=3.31.2
 ARG NINJAVERSION=1.12.1
@@ -19,7 +27,7 @@ ARG ZDNN_VERSION=v1.1.1
 #   UBI 9 (ubi9) ships gcc, make, cmake, and openblas-devel via the
 #   standard UBI + CodeReady Linux Builder repos.
 # ---------------------------------------------------------------------------
-FROM --platform=linux/s390x registry.redhat.io/ubi9/ubi:latest AS base-s390x
+FROM --platform=linux/s390x registry.access.redhat.com/ubi9/ubi:latest AS base-s390x
 
 RUN dnf install -y --nodocs --allowerasing \
         ca-certificates \
@@ -66,7 +74,7 @@ RUN autoconf \
 
 # ---------------------------------------------------------------------------
 # Stage 3 — llama-server-cpu_s390x
-#   Builds llama-server using the cpu_s390x CMake preset.
+#   Builds llama-server using the cpu_s390x CMake preset (VXE SIMD, no zDNN).
 # ---------------------------------------------------------------------------
 FROM base-s390x AS llama-server-cpu_s390x
 
@@ -77,6 +85,26 @@ COPY llama/compat llama/compat
 RUN cmake -S llama/server --preset cpu_s390x \
         && cmake --build build/llama-server-cpu_s390x -- -l $(nproc) \
         && cmake --install build/llama-server-cpu_s390x --component llama-server --strip
+
+# ---------------------------------------------------------------------------
+# Stage 2b — llama-server-zdnn_s390x
+#   Builds the zDNN accelerator backend using the cpu_s390x_zdnn CMake preset.
+#   Requires the IBM zDNN library (libzdnn) — installed from the system package.
+#   The install step produces only libggml-zdnn.so in dist/lib/ollama/s390x_zdnn/
+#   which ollama's auto-discovery picks up via the subdirectory scan we added.
+# ---------------------------------------------------------------------------
+FROM base-s390x AS llama-server-zdnn_s390x
+
+RUN dnf install -y --nodocs zdnn-devel \
+    && dnf clean all
+
+COPY LLAMA_CPP_VERSION .
+COPY llama/server llama/server
+COPY llama/compat llama/compat
+
+RUN cmake -S llama/server --preset cpu_s390x_zdnn \
+        && cmake --build build/llama-server-cpu_s390x_zdnn -- -l $(nproc) \
+        && cmake --install build/llama-server-cpu_s390x_zdnn --component llama-server --strip
 
 # ---------------------------------------------------------------------------
 # Stage 4 — Go build
@@ -108,7 +136,10 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 #   Red Hat UBI 9 minimal satisfies OpenShift AI / KServe image policy.
 #   microdnf is the package manager in ubi-minimal.
 # ---------------------------------------------------------------------------
-FROM --platform=linux/s390x registry.redhat.io/ubi9/ubi-minimal:latest
+# ---------------------------------------------------------------------------
+# Stage 4a — runtime (CPU/VXE, default target)
+# ---------------------------------------------------------------------------
+FROM --platform=linux/s390x registry.access.redhat.com/ubi9/ubi-minimal:latest AS runtime
 
 RUN microdnf install -y openblas --nodocs \
     && microdnf clean all
@@ -124,20 +155,13 @@ COPY --from=llama-server-cpu_s390x dist/lib/ollama   /usr/lib/ollama
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV LD_LIBRARY_PATH=/usr/lib/ollama
 
-# Non-root user — uid 10001 keeps it outside the standard system uid range.
 RUN useradd -r -s /sbin/nologin -u 10001 -m -d /home/ollama ollama \
     && mkdir -p /home/ollama/.ollama \
     && chown -R ollama:0 /home/ollama \
     && chmod -R g=u /home/ollama
 
-# Default to localhost; KServe's ServingRuntime overrides OLLAMA_HOST to
-# 0.0.0.0 via env so the sidecar proxy can reach the server.
 ENV OLLAMA_HOST=127.0.0.1:11434
-# Models directory — overridden at runtime by OLLAMA_MODELS env in the
-# Deployment (points at the ollama-model-storage PVC at /ollama-storage).
 ENV OLLAMA_MODELS=/home/ollama/.ollama/models
-# s390x: GGUF tensors must be byte-swapped LE→BE on every cold load.
-# Extend the load timeout well past the default 5m so bswap completes.
 ENV OLLAMA_LOAD_TIMEOUT=30m
 
 EXPOSE 11434
@@ -149,3 +173,20 @@ USER 10001
 
 ENTRYPOINT ["/usr/bin/ollama"]
 CMD ["serve"]
+
+# ---------------------------------------------------------------------------
+# Stage 4b — runtime-zdnn (zDNN/zAIU, IBM z17+ target)
+#   Extends the CPU image with:
+#     - libzdnn runtime library (from system package)
+#     - libggml-zdnn.so in /usr/lib/ollama/s390x_zdnn/ (auto-discovered by ollama)
+# ---------------------------------------------------------------------------
+FROM runtime AS runtime-zdnn
+
+USER 0
+
+RUN microdnf install -y zdnn --nodocs \
+    && microdnf clean all
+
+COPY --from=llama-server-zdnn_s390x dist/lib/ollama/s390x_zdnn /usr/lib/ollama/s390x_zdnn
+
+USER 10001

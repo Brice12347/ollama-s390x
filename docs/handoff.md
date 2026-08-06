@@ -394,6 +394,7 @@ See [known incompatible models](#known-limitations) above. `qwen2.5:0.5b` and `I
 | [`docs/model_download.md`](model_download.md) | How to pull, run, and manage models |
 | [`docs/model_compatibility_matrix.md`](model_compatibility_matrix.md) | Tested models with tok/s and RAM benchmarks |
 | [`docs/gguf_s390x_notes.md`](gguf_s390x_notes.md) | GGUF endianness and quantization deep dive |
+| [`docs/open-webui-s390x.md`](open-webui-s390x.md) | Open WebUI s390x port — all changes, disabled features, deployment notes |
 | [`scripts/install.sh`](../scripts/install.sh) | One-liner installer |
 | [`logs/model_perf_test_001.md`](../logs/model_perf_test_001.md) | Raw performance test results from triframe (2026-07-02) |
 | [`logs/model_test_001.md`](../logs/model_test_001.md) | Model functional test log |

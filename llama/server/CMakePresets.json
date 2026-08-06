@@ -61,6 +61,15 @@
       }
     },
     {
+      "name": "cpu_s390x_spyre",
+      "inherits": ["cpu_s390x_base"],
+      "binaryDir": "${sourceDir}/../../build/llama-server-cpu_s390x_spyre",
+      "description": "s390x Spyre backend scaffolding build; currently mirrors cpu_s390x until native Spyre support is implemented",
+      "cacheVariables": {
+        "GGML_VXE": "ON"
+      }
+    },
+    {
       "name": "cpu_s390x_novxe",
       "inherits": ["cpu_s390x_base"],
       "binaryDir": "${sourceDir}/../../build/llama-server-cpu_s390x_novxe",
@@ -291,6 +300,11 @@
     {
       "name": "cpu_s390x_zdnn",
       "configurePreset": "cpu_s390x_zdnn",
+      "targets": ["llama-server", "llama-quantize"]
+    },
+    {
+      "name": "cpu_s390x_spyre",
+      "configurePreset": "cpu_s390x_spyre",
       "targets": ["llama-server", "llama-quantize"]
     },
     {
