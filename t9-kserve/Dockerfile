@@ -20,7 +20,7 @@
 #       -t quay.io/brice_patchou/ollama-s390x:kserve-zdnn .
 #
 # Push:
-#   podman push quay.io/brice_patchou/ollama-s390x:kserve
+#   podman push quay.io/brice_patchou/oll-s390x:kserve
 #   podman push quay.io/brice_patchou/ollama-s390x:kserve-vxe
 #   podman push quay.io/brice_patchou/ollama-s390x:kserve-zdnn
 
