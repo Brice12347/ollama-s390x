@@ -461,6 +461,12 @@ func Sigmoid(a *Array) *Array {
 	return a.Sigmoid()
 }
 
+func Erf(a *Array) *Array {
+	out := New("ERF")
+	C.mlx_erf(&out.ctx, a.ctx, DefaultStream().ctx)
+	return out
+}
+
 func Exp(a *Array) *Array {
 	out := New("EXP")
 	C.mlx_exp(&out.ctx, a.ctx, DefaultStream().ctx)
@@ -482,6 +488,12 @@ func Sin(a *Array) *Array {
 func Cos(a *Array) *Array {
 	out := New("COS")
 	C.mlx_cos(&out.ctx, a.ctx, DefaultStream().ctx)
+	return out
+}
+
+func erf(a *Array) *Array {
+	out := New("ERF")
+	C.mlx_erf(&out.ctx, a.ctx, DefaultStream().ctx)
 	return out
 }
 

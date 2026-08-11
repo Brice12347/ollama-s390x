@@ -280,7 +280,7 @@ func writeTestModelManifest(t *testing.T, name, digest, tmpl string) {
 	}
 
 	layers := []manifest.Layer{modelLayer, templateLayer}
-	configLayer, err := createConfigLayer(layers, model.ConfigV2{
+	configLayer, err := createConfigLayer(model.ConfigV2{
 		ModelFormat:   "gguf",
 		ModelFamily:   "llama",
 		ModelFamilies: []string{"llama"},
@@ -514,6 +514,19 @@ func TestModelCapabilities(t *testing.T) {
 				Template: chatTemplate,
 			},
 			expectedCaps: []model.Capability{model.CapabilityCompletion, model.CapabilityVision},
+		},
+		{
+			name: "nemotron3 safetensors suppresses vision and audio but keeps thinking",
+			model: Model{
+				Config: model.ConfigV2{
+					ModelFormat:  "safetensors",
+					Parser:       "nemotron-3-nano",
+					Renderer:     "nemotron-3-nano",
+					Capabilities: []string{"completion", "vision", "audio"},
+				},
+				Template: chatTemplate,
+			},
+			expectedCaps: []model.Capability{model.CapabilityCompletion, model.CapabilityTools, model.CapabilityThinking},
 		},
 		{
 			name: "gemma4 small safetensors suppresses vision and audio",
