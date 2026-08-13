@@ -1,4 +1,5 @@
-Appendix: Deployment Runbook — Ollama and OpenWebUI on zCX OpenShift AI
+# Appendix: Deployment Runbook — Ollama and OpenWebUI on zCX OpenShift AI
+
 This appendix is a hands-on reference, not a narrative — use it to reproduce the deployment described above. It covers two paths: a straightforward Deployment-based approach for quick experimentation, and the full KServe ServingRuntime + InferenceService path used in production. Adjust resource sizes, image tags, and storage classes to match your cluster.
 
 Three points apply throughout this runbook and are stated once here rather than repeated at each step:
